@@ -72,7 +72,7 @@ class myblink:
 
     # Logging Variables
     log_level = logging.DEBUG
-    log_file = "run.log"
+    log_file = "logs/run.log"
     log_size = 10 * 1024 * 1024
     log_count = 5
 
