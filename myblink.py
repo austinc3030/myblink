@@ -72,7 +72,7 @@ class myblink:
 
     # Logging Variables
     log_level = logging.DEBUG
-    log_file = "logs/run.log"
+    log_file = "stdout"
     log_size = 10 * 1024 * 1024
     log_count = 5
 
@@ -127,11 +127,14 @@ class myblink:
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
 
-        handler = self.CustomRotatingFileHandler(
-            self.log_file,
-            maxBytes=self.log_size,
-            backupCount=self.log_count,
-        )
+        if self.log_file == "stdout":
+            handler = logging.StreamHandler(sys.stdout)
+        else:
+            handler = self.CustomRotatingFileHandler(
+                self.log_file,
+                maxBytes=self.log_size,
+                backupCount=self.log_count,
+            )
         handler.setLevel(self.log_level)
         handler.setFormatter(formatter)
 
