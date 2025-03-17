@@ -77,7 +77,7 @@ class myblink:
     log_count = 5
 
     # Config Variables
-    config_file = "config.json"
+    config_file = "/app/config.json"
     config = {}
 
     # Blink Variables
