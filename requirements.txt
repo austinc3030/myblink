@@ -18,5 +18,4 @@ sortedcontainers==2.4.0
 text-unidecode==1.3
 urllib3==2.2.2
 validators==0.33.0
-./python-voipms
 yarl==1.9.4
