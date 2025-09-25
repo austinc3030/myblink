@@ -3,4 +3,4 @@
 	url = https://github.com/dynacylabs/blinkpy.git
 [submodule "python-voipms"]
 	path = python-voipms
-	url = https://github.com:4doom4/python-voipms.git
+	url = https://github.com/4doom4/python-voipms.git
