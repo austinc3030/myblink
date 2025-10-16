@@ -280,6 +280,26 @@ class myblink:
             for msg in blink_msgs:
                 self.voipms.dids.delete.sms(int(msg["id"]))
 
+    async def _verify_and_save_blink(self):
+        """Verify Blink authentication and save credentials."""
+        # Verify Blink is available after start
+        if not self.blink.available:
+            self.logger.error("Blink authentication failed - service not available after start()")
+            raise Exception("Blink authentication failed - service not available")
+
+        # Verify we have cameras/syncs
+        if not self.blink.sync and not self.blink.cameras:
+            self.logger.error("No Blink sync modules or cameras found after authentication")
+            raise Exception("No Blink devices found - authentication may have failed")
+
+        # Save successful credentials only if authentication actually worked
+        if hasattr(self.blink.auth, 'login_attributes') and self.blink.available:
+            self.config["blink"]["blinkpy_conf"] = json.dumps(
+                self.blink.auth.login_attributes, indent=4
+            )
+            self.save_config()
+            self.logger.info("Blink credentials saved successfully")
+
     @async_to_sync
     async def init_blink(self):
         try:
@@ -295,56 +315,70 @@ class myblink:
             # Saved credentials with expired tokens cause interactive prompts
             self.logger.info("Attempting fresh Blink login")
             
-            # Clear any saved credentials to force fresh login
+            # Clear any saved credentials to force fresh login and save config
             if self.config["blink"]["blinkpy_conf"]:
                 self.logger.info("Clearing saved credentials to avoid expired token issues")
                 self.config["blink"]["blinkpy_conf"] = ""
+                self.save_config()
                 
+            # Create fresh auth info with ONLY username and password
+            # This ensures no old tokens are present
             auth_info = {
                 "username": self.config["blink"]["username"],
                 "password": self.config["blink"]["password"],
             }
             
+            self.logger.info(f"Creating Auth for user: {auth_info['username']}")
+            
             # Create Auth with session parameter - this is critical!
+            # no_prompt=True prevents interactive input
             self.blink.auth = Auth(auth_info, no_prompt=True, session=session)
             
             # Start Blink - this will attempt login
             try:
+                self.logger.info("Calling blink.start()...")
                 await self.blink.start()
-            except EOFError:
+                self.logger.info("blink.start() completed")
+            except EOFError as eof_error:
                 # EOFError means it tried to prompt for 2FA - retrieve it from VoIP.ms
-                self.logger.info("2FA required (EOFError caught), retrieving code from VoIP.ms")
+                self.logger.info(f"2FA required (EOFError caught: {eof_error}), retrieving code from VoIP.ms")
                 blink_code = self.get_blink_code()
                 if blink_code:
                     self.logger.info(f"Retrieved 2FA code: {blink_code}")
-                    # Add 2FA code to auth data and retry
-                    self.blink.auth.data["2fa_code"] = blink_code
-                    # Need to recreate auth with 2FA code
+                    # Add 2FA code to auth_info and recreate Auth
                     auth_info["2fa_code"] = blink_code
                     self.blink.auth = Auth(auth_info, no_prompt=True, session=session)
+                    self.logger.info("Retrying blink.start() with 2FA code...")
                     await self.blink.start()
+                    self.logger.info("blink.start() with 2FA completed")
                 else:
                     self.logger.error("Failed to retrieve 2FA code from VoIP.ms")
                     raise Exception("2FA code not received from VoIP.ms")
+            except Exception as e:
+                self.logger.error(f"Exception during blink.start(): {type(e).__name__}: {e}")
+                # Check if blink is asking for 2FA via check_key_required
+                if hasattr(self.blink.auth, 'check_key_required'):
+                    try:
+                        if self.blink.auth.check_key_required():
+                            self.logger.info("2FA required (check_key_required=True), retrieving code from VoIP.ms")
+                            blink_code = self.get_blink_code()
+                            if blink_code:
+                                self.logger.info(f"Retrieved 2FA code: {blink_code}")
+                                auth_info["2fa_code"] = blink_code
+                                self.blink.auth = Auth(auth_info, no_prompt=True, session=session)
+                                self.logger.info("Retrying blink.start() with 2FA code...")
+                                await self.blink.start()
+                                self.logger.info("blink.start() with 2FA completed")
+                                # Don't raise - we handled it
+                                return await self._verify_and_save_blink()
+                    except Exception as check_error:
+                        self.logger.warning(f"Error checking for 2FA requirement: {check_error}")
+                # Re-raise the original exception if we couldn't handle it
+                raise
 
-            # Verify Blink is available after start
-            if not self.blink.available:
-                self.logger.error("Blink authentication failed - service not available after start()")
-                raise Exception("Blink authentication failed - service not available")
-
-            # Verify we have cameras/syncs
-            if not self.blink.sync and not self.blink.cameras:
-                self.logger.error("No Blink sync modules or cameras found after authentication")
-                raise Exception("No Blink devices found - authentication may have failed")
-
-            # Save successful credentials only if authentication actually worked
-            if hasattr(self.blink.auth, 'login_attributes') and self.blink.available:
-                self.config["blink"]["blinkpy_conf"] = json.dumps(
-                    self.blink.auth.login_attributes, indent=4
-                )
-                self.save_config()
-                self.logger.info("Blink credentials saved successfully")
-
+            # Verify and save
+            await self._verify_and_save_blink()
+            
             self.update_health_status(healthy=True, message="Blink initialized successfully")
             self.logger.info("Blink initialization complete")
             
