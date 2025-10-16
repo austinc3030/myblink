@@ -71,10 +71,16 @@ def async_to_sync(func):
     def wrapper(*args, **kwargs):
         try:
             loop = asyncio.get_running_loop()
+            # We're already in an event loop - shouldn't happen in our case
+            raise RuntimeError("Cannot call async_to_sync from within a running loop")
         except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(func(*args, **kwargs))
+            # No event loop running, get or create the event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            # Run the coroutine as a task to ensure proper context
+            return loop.run_until_complete(asyncio.create_task(func(*args, **kwargs)))
     return wrapper
 
 
