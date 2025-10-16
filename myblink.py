@@ -75,12 +75,19 @@ def async_to_sync(func):
             raise RuntimeError("Cannot call async_to_sync from within a running loop")
         except RuntimeError:
             # No event loop running, get or create the event loop
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+            except RuntimeError:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-            # Run the coroutine as a task to ensure proper context
-            return loop.run_until_complete(asyncio.create_task(func(*args, **kwargs)))
+            
+            # Create a coroutine and wrap it in ensure_future to create a task
+            coro = func(*args, **kwargs)
+            task = asyncio.ensure_future(coro, loop=loop)
+            return loop.run_until_complete(task)
     return wrapper
 
 
@@ -115,6 +122,7 @@ class MyBlink:
 
     # Schedule settings
     MIN_TO_NEXT_STATUS = 1  # minutes
+    RUN_ON_START = os.environ.get("RUN_ON_START", "false").lower() == "true"
 
     class CustomRotatingFileHandler(RotatingFileHandler):
         """Custom file handler with timestamp-based rotation."""
@@ -492,6 +500,14 @@ class MyBlink:
         schedule.every().hour.at(":00").do(self.rearm_cameras)
         schedule.every().hour.at(":00").do(self.snooze_cameras)
 
+    def _run_all_jobs(self):
+        """Run all scheduled jobs immediately."""
+        self.logger.info("Running all scheduled jobs on startup")
+        self.update_thumbnails()
+        self.rearm_cameras()
+        self.snooze_cameras()
+        self.logger.info("Completed all scheduled jobs on startup")
+
     def run(self):
         """Main application loop."""
         log_timer = 0
@@ -499,6 +515,14 @@ class MyBlink:
         log_interval = self.MIN_TO_NEXT_STATUS * 60
 
         self.logger.info("Starting main application loop")
+
+        # Run all jobs immediately if RUN_ON_START is enabled
+        if self.RUN_ON_START:
+            self.logger.info("RUN_ON_START is enabled")
+            if self.blink_initialized:
+                self._run_all_jobs()
+            else:
+                self.logger.warning("Blink not initialized, skipping initial job run")
 
         while True:
             try:
