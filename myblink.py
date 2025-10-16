@@ -357,79 +357,56 @@ class myblink:
                 self.logger.info(f"blink.start() completed with result: {result}")
                 self.logger.info(f"blink.available: {self.blink.available}")
                 
-                # Check if 2FA is required even though no exception was raised
+                # Check if 2FA is required (blink not available means auth failed, likely 2FA needed)
                 if not self.blink.available:
-                    self.logger.info("Blink not available after start(), checking for 2FA requirement...")
-                    
-                    # Log auth state for debugging
-                    self.logger.debug(f"Auth object attributes: {dir(self.blink.auth)}")
-                    self.logger.debug(f"Auth login_response: {getattr(self.blink.auth, 'login_response', 'N/A')}")
-                    
-                    # Check multiple ways if 2FA is needed
-                    key_required = False
-                    
-                    if hasattr(self.blink.auth, 'check_key_required'):
-                        try:
-                            key_required = self.blink.auth.check_key_required()
-                            self.logger.info(f"check_key_required() returned: {key_required}")
-                        except Exception as e:
-                            self.logger.warning(f"Error calling check_key_required(): {e}")
-                    
-                    # Also check if there's a key_required attribute
-                    if hasattr(self.blink, 'key_required'):
-                        self.logger.info(f"blink.key_required: {self.blink.key_required}")
-                        key_required = key_required or self.blink.key_required
-                    
-                    # If not available and no clear 2FA indication, assume 2FA is needed
-                    # (Blink sends the code, so we should try to use it)
-                    if not key_required:
-                        self.logger.info("No explicit 2FA flag, but auth failed - assuming 2FA needed")
-                        key_required = True
-                    
-                    if key_required:
-                        try:
-                            self.logger.info("2FA required, waiting for SMS code from VoIP.ms...")
-                            # Give SMS a moment to arrive
-                            await asyncio.sleep(2)
+                    self.logger.info("Blink not available after start() - 2FA likely required")
+                    try:
+                        self.logger.info("2FA required, waiting for SMS code from VoIP.ms...")
+                        # Give SMS a moment to arrive
+                        await asyncio.sleep(2)
+                        
+                        blink_code = self.get_blink_code()
+                        if blink_code:
+                            self.logger.info(f"Retrieved 2FA code: {blink_code}")
+                            # Add 2FA code to auth data
+                            self.blink.auth.data["2fa_code"] = blink_code
+                            self.logger.info("2FA code added to auth data")
                             
-                            blink_code = self.get_blink_code()
-                            if blink_code:
-                                self.logger.info(f"Retrieved 2FA code: {blink_code}")
-                                # Add 2FA code to auth data
-                                self.blink.auth.data["2fa_code"] = blink_code
-                                self.logger.info("2FA code added to auth data")
+                            # Retry login with 2FA code
+                            self.logger.info("Retrying login with 2FA code...")
+                            login_response = await self.blink.auth.login()
+                            self.logger.info(f"Login with 2FA response: {login_response is not None}")
+                            
+                            if login_response:
+                                # Save login response to auth object
+                                self.blink.auth.login_response = login_response
+                                self.logger.debug(f"Saved login_response with keys: {list(login_response.keys())}")
                                 
-                                # Retry login with 2FA code
-                                self.logger.info("Retrying login with 2FA code...")
-                                login_response = await self.blink.auth.login()
-                                self.logger.info(f"Login with 2FA response: {login_response is not None}")
+                                # Extract login info from response
+                                self.blink.auth.extract_login_info()
+                                # Get tier info
+                                self.blink.auth.tier_info = await self.blink.auth.get_tier_info()
+                                self.blink.auth.extract_tier_info()
+                                # Setup URLs
+                                self.blink.setup_urls()
+                                # Get homescreen
+                                await self.blink.get_homescreen()
+                                # Setup post verify
+                                if hasattr(self.blink, 'setup_post_verify'):
+                                    self.logger.info("Running setup_post_verify()...")
+                                    await self.blink.setup_post_verify()
+                                    self.logger.info("setup_post_verify() completed")
                                 
-                                if login_response:
-                                    # Extract login info from response
-                                    self.blink.auth.extract_login_info()
-                                    # Get tier info
-                                    self.blink.auth.tier_info = await self.blink.auth.get_tier_info()
-                                    self.blink.auth.extract_tier_info()
-                                    # Setup URLs
-                                    self.blink.setup_urls()
-                                    # Get homescreen
-                                    await self.blink.get_homescreen()
-                                    # Setup post verify
-                                    if hasattr(self.blink, 'setup_post_verify'):
-                                        self.logger.info("Running setup_post_verify()...")
-                                        await self.blink.setup_post_verify()
-                                        self.logger.info("setup_post_verify() completed")
-                                    
-                                    # Refresh blink status
-                                    self.logger.info(f"After 2FA - blink.available: {self.blink.available}")
-                                else:
-                                    raise Exception("Login with 2FA failed")
+                                # Refresh blink status
+                                self.logger.info(f"After 2FA - blink.available: {self.blink.available}")
                             else:
-                                self.logger.error("Failed to retrieve 2FA code from VoIP.ms after multiple retries")
-                                raise Exception("2FA code not received from VoIP.ms")
-                        except Exception as check_error:
-                            self.logger.error(f"Error handling 2FA after start(): {check_error}")
-                            raise
+                                raise Exception("Login with 2FA failed")
+                        else:
+                            self.logger.error("Failed to retrieve 2FA code from VoIP.ms after multiple retries")
+                            raise Exception("2FA code not received from VoIP.ms")
+                    except Exception as check_error:
+                        self.logger.error(f"Error handling 2FA after start(): {check_error}")
+                        raise
                         
             except EOFError as eof_error:
                 # EOFError means it tried to prompt for 2FA - retrieve it from VoIP.ms
