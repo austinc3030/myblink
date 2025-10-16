@@ -162,6 +162,18 @@ The autoheal container will automatically restart myblink if it becomes unhealth
 
 ## Troubleshooting
 
+### "Malformed login response: None" or Blink Authentication Failures
+
+Your saved Blink credentials may be expired. See detailed troubleshooting guide: [BLINK_AUTH_TROUBLESHOOTING.md](BLINK_AUTH_TROUBLESHOOTING.md)
+
+**Quick fix:**
+```bash
+docker stop myblink
+# Clear the "blinkpy_conf" value in config.json (set it to "")
+docker start myblink
+docker logs -f myblink
+```
+
 ### AttributeError: 'Blink' object has no attribute 'key_required'
 
 This error means the git submodules are not initialized:

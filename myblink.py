@@ -150,6 +150,15 @@ class myblink:
         self.init_schedule()
         self.update_health_status(healthy=True, message="Application started successfully")
 
+    def __del__(self):
+        """Cleanup method to close aiohttp sessions"""
+        if hasattr(self, 'blink') and self.blink and hasattr(self.blink, 'auth'):
+            try:
+                if hasattr(self.blink.auth, 'session') and self.blink.auth.session:
+                    asyncio.run(self.blink.auth.session.close())
+            except:
+                pass
+
     def init_logger(self):
         formatter = logging.Formatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -264,31 +273,57 @@ class myblink:
             self.delete_blink_msgs()
 
             self.blink = Blink(session=ClientSession())
+            
+            # Try saved credentials first, fall back to username/password
             if self.config["blink"]["blinkpy_conf"]:
+                self.logger.info("Attempting to use saved Blink credentials")
                 auth_info = json.loads(self.config["blink"]["blinkpy_conf"])
+                self.blink.auth = Auth(auth_info, no_prompt=True)
+                
+                try:
+                    await self.blink.start()
+                except Exception as e:
+                    self.logger.warning(f"Saved credentials failed: {e}, trying fresh login")
+                    # Clear saved credentials and try fresh login
+                    self.config["blink"]["blinkpy_conf"] = ""
+                    auth_info = {
+                        "username": self.config["blink"]["username"],
+                        "password": self.config["blink"]["password"],
+                    }
+                    self.blink.auth = Auth(auth_info, no_prompt=True)
+                    await self.blink.start()
             else:
+                self.logger.info("Attempting fresh Blink login with username/password")
                 auth_info = {
                     "username": self.config["blink"]["username"],
                     "password": self.config["blink"]["password"],
                 }
-
-            self.blink.auth = Auth(auth_info, no_prompt=True)
-            await self.blink.start()
+                self.blink.auth = Auth(auth_info, no_prompt=True)
+                await self.blink.start()
 
             # Check if 2FA key is required (handle API changes)
             if hasattr(self.blink, 'key_required') and self.blink.key_required:
+                self.logger.info("2FA required, waiting for SMS code")
                 blink_code = self.get_blink_code()
                 if blink_code:
+                    self.logger.info(f"Received 2FA code: {blink_code}")
                     await self.blink.auth.send_auth_key(self.blink, blink_code)
                     if hasattr(self.blink, 'setup_post_verify'):
                         await self.blink.setup_post_verify()
+                else:
+                    self.logger.error("Failed to receive 2FA code from SMS")
+                    raise Exception("2FA code not received")
 
-            self.config["blink"]["blinkpy_conf"] = json.dumps(
-                self.blink.auth.login_attributes, indent=4
-            )
+            # Save successful credentials
+            if hasattr(self.blink.auth, 'login_attributes'):
+                self.config["blink"]["blinkpy_conf"] = json.dumps(
+                    self.blink.auth.login_attributes, indent=4
+                )
+                self.save_config()
+                self.logger.info("Blink credentials saved successfully")
 
-            self.save_config()
             self.update_health_status(healthy=True, message="Blink initialized successfully")
+            self.logger.info("Blink initialization complete")
             
         except Exception as e:
             self.logger.exception(f"Failed to initialize Blink: {e}")
@@ -359,12 +394,29 @@ class myblink:
                 time.sleep(1)
             except KeyboardInterrupt:
                 self.logger.info("Shutting down gracefully...")
+                self.cleanup()
                 self.update_health_status(healthy=False, message="Application shutting down")
                 sys.exit(0)
             except Exception as e:
                 self.logger.exception(f"Unexpected error in main loop: {e}")
                 self.update_health_status(healthy=False, message="Main loop error", error=e)
                 time.sleep(5)  # Brief pause before continuing
+
+    def cleanup(self):
+        """Cleanup resources before shutdown"""
+        try:
+            if hasattr(self, 'blink') and self.blink:
+                # Close aiohttp session
+                if hasattr(self.blink, 'auth') and hasattr(self.blink.auth, 'session'):
+                    session = self.blink.auth.session
+                    if session and not session.closed:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(session.close())
+                        loop.close()
+                        self.logger.info("Closed aiohttp session")
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
 
 
 if __name__ == "__main__":
