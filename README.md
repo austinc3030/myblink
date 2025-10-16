@@ -1,12 +1,38 @@
 # myblink
 
 ## Install
-```
-git submodule update --init
+```bash
+# Clone with submodules
+git clone --recurse-submodules https://github.com/austinc3030/myblink.git
+
+# Or if already cloned, initialize submodules
+git submodule update --init --recursive
+
+# Set up Python environment (for local development)
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+```
+
+## Docker Installation
+
+```bash
+# Initialize submodules (REQUIRED)
+git submodule update --init --recursive
+
+# Build the Docker image
+docker build -t myblink .
+
+# Run with docker-compose (recommended)
+docker-compose up -d
+
+# Or run directly
+docker run -d \
+  --name myblink \
+  -v $(pwd)/config.json:/app/config.json \
+  --restart unless-stopped \
+  myblink
 ```
 
 ## Docker Healthcheck
@@ -135,6 +161,32 @@ services:
 The autoheal container will automatically restart myblink if it becomes unhealthy.
 
 ## Troubleshooting
+
+### AttributeError: 'Blink' object has no attribute 'key_required'
+
+This error means the git submodules are not initialized:
+
+**Solution**:
+```bash
+# Initialize submodules
+git submodule update --init --recursive
+
+# Rebuild the Docker image
+docker build -t myblink . --no-cache
+
+# Recreate the container
+docker-compose down
+docker-compose up -d
+```
+
+### DeprecationWarning: There is no current event loop
+
+This warning has been fixed in the latest version. If you see it:
+```bash
+git pull
+docker build -t myblink .
+docker-compose up -d --force-recreate
+```
 
 ### Permission Errors in Docker
 

@@ -78,7 +78,12 @@ def blink_retry(retry_limit_attr):
 @catch_exceptions(cancel_on_failure=False)
 def async_to_sync(func):
     def wrapper(*args, **kwargs):
-        loop = asyncio.get_event_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No event loop running, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
         return loop.run_until_complete(func(*args, **kwargs))
 
     return wrapper
@@ -255,31 +260,40 @@ class myblink:
 
     @async_to_sync
     async def init_blink(self):
-        self.delete_blink_msgs()
+        try:
+            self.delete_blink_msgs()
 
-        self.blink = Blink(session=ClientSession())
-        if self.config["blink"]["blinkpy_conf"]:
-            auth_info = json.loads(self.config["blink"]["blinkpy_conf"])
-        else:
-            auth_info = {
-                "username": self.config["blink"]["username"],
-                "password": self.config["blink"]["password"],
-            }
+            self.blink = Blink(session=ClientSession())
+            if self.config["blink"]["blinkpy_conf"]:
+                auth_info = json.loads(self.config["blink"]["blinkpy_conf"])
+            else:
+                auth_info = {
+                    "username": self.config["blink"]["username"],
+                    "password": self.config["blink"]["password"],
+                }
 
-        self.blink.auth = Auth(auth_info, no_prompt=True)
-        await self.blink.start()
+            self.blink.auth = Auth(auth_info, no_prompt=True)
+            await self.blink.start()
 
-        if self.blink.key_required:
-            blink_code = self.get_blink_code()
-            if blink_code:
-                await self.blink.auth.send_auth_key(self.blink, blink_code)
-                await self.blink.setup_post_verify()
+            # Check if 2FA key is required (handle API changes)
+            if hasattr(self.blink, 'key_required') and self.blink.key_required:
+                blink_code = self.get_blink_code()
+                if blink_code:
+                    await self.blink.auth.send_auth_key(self.blink, blink_code)
+                    if hasattr(self.blink, 'setup_post_verify'):
+                        await self.blink.setup_post_verify()
 
-        self.config["blink"]["blinkpy_conf"] = json.dumps(
-            self.blink.auth.login_attributes, indent=4
-        )
+            self.config["blink"]["blinkpy_conf"] = json.dumps(
+                self.blink.auth.login_attributes, indent=4
+            )
 
-        self.save_config()
+            self.save_config()
+            self.update_health_status(healthy=True, message="Blink initialized successfully")
+            
+        except Exception as e:
+            self.logger.exception(f"Failed to initialize Blink: {e}")
+            self.update_health_status(healthy=False, message="Blink initialization failed", error=e)
+            raise
 
     def reinit_blink(self):
         self.blink = None
