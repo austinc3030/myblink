@@ -105,7 +105,7 @@ class MyBlink:
     VOIPMS_MSG_STR = "Blink"
     VOIPMS_RETRY_LIMIT = 10
     VOIPMS_RETRY_DELAY = 3  # seconds
-    VOIPMS_SMS_WAIT = 2  # seconds to wait for SMS delivery
+    VOIPMS_SMS_WAIT = 30  # seconds to wait for SMS delivery
 
     # Schedule settings
     MIN_TO_NEXT_STATUS = 1  # minutes
@@ -354,9 +354,32 @@ class MyBlink:
             session = ClientSession()
             self.blink = Blink(session=session)
 
-            # Clear saved credentials to avoid expired token issues
+            # Try cached credentials first
             if self.config["blink"]["blinkpy_conf"]:
-                self.logger.info("Clearing saved credentials for fresh login")
+                self.logger.info("Attempting login with cached credentials")
+                try:
+                    cached_auth = json.loads(self.config["blink"]["blinkpy_conf"])
+                    self.blink.auth = Auth(cached_auth, no_prompt=True, session=session)
+                    
+                    result = await self.blink.start()
+                    self.logger.info(f"Cached credentials result: {result}, available: {self.blink.available}")
+                    
+                    if self.blink.available:
+                        self.logger.info("Successfully authenticated with cached credentials")
+                        await self._verify_and_save_blink()
+                        self.update_health_status(healthy=True, message="Blink initialized with cached credentials")
+                        self.logger.info("Blink initialization complete")
+                        return
+                    else:
+                        self.logger.warning("Cached credentials failed or expired, falling back to fresh login")
+                except Exception as e:
+                    self.logger.warning(f"Error using cached credentials: {e}, falling back to fresh login")
+
+            # Fall back to fresh login with username/password
+            self.logger.info("Performing fresh login")
+            
+            # Clear failed cached credentials
+            if self.config["blink"]["blinkpy_conf"]:
                 self.config["blink"]["blinkpy_conf"] = ""
                 self._save_config()
 
