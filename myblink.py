@@ -228,11 +228,13 @@ class myblink:
         )
 
     def get_blink_code(self):
+        self.logger.info(f"Attempting to retrieve 2FA code from VoIP.ms (up to {self.voipms_retry_limit} retries)...")
         for retry_count in range(self.voipms_retry_limit):
             blink_msgs = []
             sms_messages = self.get_sms_msgs()
 
             if sms_messages:
+                self.logger.debug(f"Retry {retry_count + 1}: Found {len(sms_messages)} total SMS messages")
                 for msg in sms_messages:
                     if (
                         msg["type"] == "1"
@@ -241,14 +243,24 @@ class myblink:
                         and self.msg_str in msg["message"]
                     ):
                         blink_msgs.append(msg)
+                        self.logger.debug(f"Found Blink message: {msg['message']}")
+            else:
+                self.logger.debug(f"Retry {retry_count + 1}: No SMS messages returned")
 
             if blink_msgs and len(blink_msgs) == 1:
                 match = re.search(r"\d{6}", blink_msgs[0]["message"])
                 if match:
-                    return match.group()
-            else:
+                    code = match.group()
+                    self.logger.info(f"Successfully extracted 2FA code: {code}")
+                    return code
+            elif blink_msgs and len(blink_msgs) > 1:
+                self.logger.warning(f"Found {len(blink_msgs)} Blink messages, expected 1")
+            
+            if retry_count < self.voipms_retry_limit - 1:
+                self.logger.debug(f"Code not found yet, waiting {self.voipms_retry_delay} seconds before retry...")
                 time.sleep(self.voipms_retry_delay)
 
+        self.logger.error("Failed to retrieve 2FA code after all retries")
         return None
 
     def get_sms_msgs(self):
@@ -322,23 +334,86 @@ class myblink:
                 self.save_config()
                 
             # Create fresh auth info with ONLY username and password
-            # This ensures no old tokens are present
+            # Explicitly create a new dict to ensure no token data
             auth_info = {
                 "username": self.config["blink"]["username"],
                 "password": self.config["blink"]["password"],
             }
             
             self.logger.info(f"Creating Auth for user: {auth_info['username']}")
+            self.logger.debug(f"Auth info keys: {list(auth_info.keys())}")
             
             # Create Auth with session parameter - this is critical!
             # no_prompt=True prevents interactive input
             self.blink.auth = Auth(auth_info, no_prompt=True, session=session)
             
+            # Log what the auth object thinks its state is
+            self.logger.debug(f"Auth data after creation: {list(self.blink.auth.data.keys()) if hasattr(self.blink.auth, 'data') else 'no data attr'}")
+            
             # Start Blink - this will attempt login
             try:
                 self.logger.info("Calling blink.start()...")
-                await self.blink.start()
-                self.logger.info("blink.start() completed")
+                result = await self.blink.start()
+                self.logger.info(f"blink.start() completed with result: {result}")
+                self.logger.info(f"blink.available: {self.blink.available}")
+                
+                # Check if 2FA is required even though no exception was raised
+                if not self.blink.available:
+                    self.logger.info("Blink not available after start(), checking for 2FA requirement...")
+                    
+                    # Log auth state for debugging
+                    self.logger.debug(f"Auth object attributes: {dir(self.blink.auth)}")
+                    self.logger.debug(f"Auth login_response: {getattr(self.blink.auth, 'login_response', 'N/A')}")
+                    
+                    # Check multiple ways if 2FA is needed
+                    key_required = False
+                    
+                    if hasattr(self.blink.auth, 'check_key_required'):
+                        try:
+                            key_required = self.blink.auth.check_key_required()
+                            self.logger.info(f"check_key_required() returned: {key_required}")
+                        except Exception as e:
+                            self.logger.warning(f"Error calling check_key_required(): {e}")
+                    
+                    # Also check if there's a key_required attribute
+                    if hasattr(self.blink, 'key_required'):
+                        self.logger.info(f"blink.key_required: {self.blink.key_required}")
+                        key_required = key_required or self.blink.key_required
+                    
+                    # If not available and no clear 2FA indication, assume 2FA is needed
+                    # (Blink sends the code, so we should try to use it)
+                    if not key_required:
+                        self.logger.info("No explicit 2FA flag, but auth failed - assuming 2FA needed")
+                        key_required = True
+                    
+                    if key_required:
+                        try:
+                            self.logger.info("2FA required, waiting for SMS code from VoIP.ms...")
+                            # Give SMS a moment to arrive
+                            await asyncio.sleep(2)
+                            
+                            blink_code = self.get_blink_code()
+                            if blink_code:
+                                self.logger.info(f"Retrieved 2FA code: {blink_code}")
+                                # Send the auth key using the blink object's method
+                                await self.blink.auth.send_auth_key(self.blink, blink_code)
+                                self.logger.info("2FA code sent to Blink")
+                                
+                                # Setup post-verify if method exists
+                                if hasattr(self.blink, 'setup_post_verify'):
+                                    self.logger.info("Running setup_post_verify()...")
+                                    await self.blink.setup_post_verify()
+                                    self.logger.info("setup_post_verify() completed")
+                                
+                                # Refresh blink status
+                                self.logger.info(f"After 2FA - blink.available: {self.blink.available}")
+                            else:
+                                self.logger.error("Failed to retrieve 2FA code from VoIP.ms after multiple retries")
+                                raise Exception("2FA code not received from VoIP.ms")
+                        except Exception as check_error:
+                            self.logger.error(f"Error handling 2FA after start(): {check_error}")
+                            raise
+                        
             except EOFError as eof_error:
                 # EOFError means it tried to prompt for 2FA - retrieve it from VoIP.ms
                 self.logger.info(f"2FA required (EOFError caught: {eof_error}), retrieving code from VoIP.ms")
@@ -356,10 +431,15 @@ class myblink:
                     raise Exception("2FA code not received from VoIP.ms")
             except Exception as e:
                 self.logger.error(f"Exception during blink.start(): {type(e).__name__}: {e}")
+                self.logger.debug(f"blink.available: {getattr(self.blink, 'available', 'N/A')}")
+                self.logger.debug(f"blink.auth.login_response: {getattr(self.blink.auth, 'login_response', 'N/A')}")
+                
                 # Check if blink is asking for 2FA via check_key_required
                 if hasattr(self.blink.auth, 'check_key_required'):
                     try:
-                        if self.blink.auth.check_key_required():
+                        key_required = self.blink.auth.check_key_required()
+                        self.logger.info(f"check_key_required() returned: {key_required}")
+                        if key_required:
                             self.logger.info("2FA required (check_key_required=True), retrieving code from VoIP.ms")
                             blink_code = self.get_blink_code()
                             if blink_code:
