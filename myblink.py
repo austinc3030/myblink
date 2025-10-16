@@ -13,6 +13,7 @@ from functools import wraps
 from aiohttp import ClientSession
 from blinkpy.auth import Auth
 from blinkpy.blinkpy import Blink
+from blinkpy.helpers.util import json_load, json_save
 from logging.handlers import RotatingFileHandler
 from voipms import VoipMs
 
@@ -284,13 +285,18 @@ class myblink:
         try:
             self.delete_blink_msgs()
 
-            self.blink = Blink(session=ClientSession())
+            # Create session
+            session = ClientSession()
+            
+            # Create Blink instance
+            self.blink = Blink(session=session)
             
             # Try saved credentials first, fall back to username/password
             if self.config["blink"]["blinkpy_conf"]:
                 self.logger.info("Attempting to use saved Blink credentials")
                 auth_info = json.loads(self.config["blink"]["blinkpy_conf"])
-                self.blink.auth = Auth(auth_info, no_prompt=True)
+                # Create Auth with session parameter - this is critical!
+                self.blink.auth = Auth(auth_info, session=session)
                 
                 try:
                     await self.blink.start()
@@ -305,7 +311,8 @@ class myblink:
                         "username": self.config["blink"]["username"],
                         "password": self.config["blink"]["password"],
                     }
-                    self.blink.auth = Auth(auth_info, no_prompt=True)
+                    # Create new Auth with session parameter
+                    self.blink.auth = Auth(auth_info, session=session)
                     await self.blink.start()
             else:
                 self.logger.info("Attempting fresh Blink login with username/password")
@@ -313,7 +320,8 @@ class myblink:
                     "username": self.config["blink"]["username"],
                     "password": self.config["blink"]["password"],
                 }
-                self.blink.auth = Auth(auth_info, no_prompt=True)
+                # Create Auth with session parameter
+                self.blink.auth = Auth(auth_info, session=session)
                 await self.blink.start()
 
             # Verify Blink is available after start
@@ -356,6 +364,20 @@ class myblink:
             raise
 
     def reinit_blink(self):
+        # Close existing session if present
+        if hasattr(self, 'blink') and self.blink and hasattr(self.blink, 'auth'):
+            try:
+                if hasattr(self.blink.auth, 'session') and self.blink.auth.session:
+                    if not self.blink.auth.session.closed:
+                        # Run async close in sync context
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self.blink.auth.session.close())
+                        loop.close()
+                        self.logger.info("Closed old aiohttp session")
+            except Exception as e:
+                self.logger.warning(f"Error closing old session: {e}")
+        
         self.blink = None
         self.init_blink()
 
