@@ -22,12 +22,28 @@ def catch_exceptions(cancel_on_failure=False):
         @functools.wraps(job_func)
         def wrapper(*args, **kwargs):
             try:
-                return job_func(*args, **kwargs)
+                result = job_func(*args, **kwargs)
+                # If successful, update health status
+                if hasattr(args[0], 'update_health_status'):
+                    args[0].update_health_status(
+                        healthy=True, 
+                        message=f"{job_func.__name__} executed successfully"
+                    )
+                return result
             except Exception as e:
                 exc_type, exc_value, exc_traceback = sys.exc_info()
                 filename = exc_traceback.tb_frame.f_code.co_filename
                 line_number = exc_traceback.tb_lineno
                 logging.exception(f"Exception in {filename}:{line_number}: {exc_value}")
+                
+                # Update health status on error
+                if hasattr(args[0], 'update_health_status'):
+                    args[0].update_health_status(
+                        healthy=False,
+                        message=f"Exception in {job_func.__name__}",
+                        error=e
+                    )
+                    
                 if cancel_on_failure:
                     return sys.exit()
 
@@ -80,6 +96,12 @@ class myblink:
     config_file = "/app/config.json"
     config = {}
 
+    # Health Check Variables
+    health_file = "/tmp/myblink_health.json"
+    health_timeout = 300  # 5 minutes - if no update, considered unhealthy
+    max_consecutive_errors = 3  # Max errors before marking unhealthy
+    consecutive_errors = 0
+
     # Blink Variables
     blink_retry_count = 0
     blink_retry_limit = 3
@@ -121,6 +143,7 @@ class myblink:
         self.init_voipms()
         self.init_blink()
         self.init_schedule()
+        self.update_health_status(healthy=True, message="Application started successfully")
 
     def init_logger(self):
         formatter = logging.Formatter(
@@ -149,6 +172,27 @@ class myblink:
     def save_config(self):
         with open(self.config_file, "w") as f:
             json.dump(self.config, f, indent=4)
+
+    def update_health_status(self, healthy=True, message="", error=None):
+        """Update the health status file for healthcheck monitoring"""
+        try:
+            health_data = {
+                "healthy": healthy,
+                "timestamp": time.time(),
+                "message": message,
+                "consecutive_errors": self.consecutive_errors,
+                "error": str(error) if error else None
+            }
+            with open(self.health_file, "w") as f:
+                json.dump(health_data, f, indent=2)
+            
+            if healthy:
+                self.consecutive_errors = 0
+            else:
+                self.consecutive_errors += 1
+                
+        except Exception as e:
+            logging.error(f"Failed to update health status: {e}")
 
     def init_voipms(self):
         self.voipms = VoipMs(
@@ -272,14 +316,41 @@ class myblink:
 
     def run(self):
         log_timer = 0
+        health_timer = 0
         while True:
-            schedule.run_pending()
-            next_job_eta = schedule.idle_seconds()
+            try:
+                schedule.run_pending()
+                next_job_eta = schedule.idle_seconds()
 
-            if next_job_eta is not None and log_timer == (self.min_to_next_status * 60):
-                self.logger.info(f"{next_job_eta} seconds until next job")
-            log_timer = log_timer + 1 if log_timer <= (self.min_to_next_status * 60) else 0
-            time.sleep(1)
+                if next_job_eta is not None and log_timer == (self.min_to_next_status * 60):
+                    self.logger.info(f"{next_job_eta} seconds until next job")
+                log_timer = log_timer + 1 if log_timer <= (self.min_to_next_status * 60) else 0
+                
+                # Update health status every 30 seconds to show we're alive
+                if health_timer >= 30:
+                    if self.consecutive_errors >= self.max_consecutive_errors:
+                        self.update_health_status(
+                            healthy=False,
+                            message=f"Too many consecutive errors: {self.consecutive_errors}"
+                        )
+                    else:
+                        self.update_health_status(
+                            healthy=True,
+                            message="Running normally"
+                        )
+                    health_timer = 0
+                else:
+                    health_timer += 1
+                    
+                time.sleep(1)
+            except KeyboardInterrupt:
+                self.logger.info("Shutting down gracefully...")
+                self.update_health_status(healthy=False, message="Application shutting down")
+                sys.exit(0)
+            except Exception as e:
+                self.logger.exception(f"Unexpected error in main loop: {e}")
+                self.update_health_status(healthy=False, message="Main loop error", error=e)
+                time.sleep(5)  # Brief pause before continuing
 
 
 if __name__ == "__main__":
