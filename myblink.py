@@ -395,18 +395,35 @@ class myblink:
                             blink_code = self.get_blink_code()
                             if blink_code:
                                 self.logger.info(f"Retrieved 2FA code: {blink_code}")
-                                # Send the auth key using the blink object's method
-                                await self.blink.auth.send_auth_key(self.blink, blink_code)
-                                self.logger.info("2FA code sent to Blink")
+                                # Add 2FA code to auth data
+                                self.blink.auth.data["2fa_code"] = blink_code
+                                self.logger.info("2FA code added to auth data")
                                 
-                                # Setup post-verify if method exists
-                                if hasattr(self.blink, 'setup_post_verify'):
-                                    self.logger.info("Running setup_post_verify()...")
-                                    await self.blink.setup_post_verify()
-                                    self.logger.info("setup_post_verify() completed")
+                                # Retry login with 2FA code
+                                self.logger.info("Retrying login with 2FA code...")
+                                login_response = await self.blink.auth.login()
+                                self.logger.info(f"Login with 2FA response: {login_response is not None}")
                                 
-                                # Refresh blink status
-                                self.logger.info(f"After 2FA - blink.available: {self.blink.available}")
+                                if login_response:
+                                    # Extract login info from response
+                                    self.blink.auth.extract_login_info()
+                                    # Get tier info
+                                    self.blink.auth.tier_info = await self.blink.auth.get_tier_info()
+                                    self.blink.auth.extract_tier_info()
+                                    # Setup URLs
+                                    self.blink.setup_urls()
+                                    # Get homescreen
+                                    await self.blink.get_homescreen()
+                                    # Setup post verify
+                                    if hasattr(self.blink, 'setup_post_verify'):
+                                        self.logger.info("Running setup_post_verify()...")
+                                        await self.blink.setup_post_verify()
+                                        self.logger.info("setup_post_verify() completed")
+                                    
+                                    # Refresh blink status
+                                    self.logger.info(f"After 2FA - blink.available: {self.blink.available}")
+                                else:
+                                    raise Exception("Login with 2FA failed")
                             else:
                                 self.logger.error("Failed to retrieve 2FA code from VoIP.ms after multiple retries")
                                 raise Exception("2FA code not received from VoIP.ms")
