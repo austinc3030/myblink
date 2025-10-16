@@ -134,4 +134,49 @@ services:
 
 The autoheal container will automatically restart myblink if it becomes unhealthy.
 
+## Troubleshooting
+
+### Permission Errors in Docker
+
+If you see permission errors like `Permission denied: '/app/.venv'` or `Permission denied: '/.local'`:
+
+**Solution**: The startup.sh has been updated to not use virtual environments inside Docker. Rebuild your image:
+```bash
+docker build -t myblink .
+docker-compose up -d --force-recreate
+```
+
+### Submodule Installation Failures
+
+If you see errors installing `./blinkpy` or `./python-voipms`:
+
+**Solution**: Ensure git submodules are initialized before building:
+```bash
+git submodule update --init --recursive
+docker build -t myblink .
+```
+
+### Container Starts but App Crashes
+
+Check the logs for specific errors:
+```bash
+docker logs myblink -f
+```
+
+If you see `AttributeError: 'Blink' object has no attribute 'key_required'`, this may indicate an outdated blinkpy version. Update submodules:
+```bash
+cd blinkpy
+git pull origin main
+cd ..
+docker build -t myblink . --no-cache
+```
+
+### Health Check Fails Immediately
+
+The healthcheck has a 60-second grace period on startup. If it fails before that:
+- Check that `/tmp/myblink_health.json` exists in the container
+- Verify the application is writing health status: `docker exec myblink cat /tmp/myblink_health.json`
+- Check application logs: `docker logs myblink`
+
 TEST
+

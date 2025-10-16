@@ -3,17 +3,18 @@ FROM python:3.12-slim
 # Set working directory inside the container
 WORKDIR /app
 
-# Copy the startup script
-COPY . /app
-
-# Install dependencies
+# Install system dependencies
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-# Pip install
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy everything (excluding items in .dockerignore)
+COPY . /app
 
-# Make healthcheck script executable
-RUN chmod +x /app/healthcheck.py
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Make scripts executable
+RUN chmod +x /app/startup.sh /app/healthcheck.py
 
 # Add healthcheck
 # Runs every 30 seconds, starts checking after 60 seconds, 
@@ -24,3 +25,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 # Set entry point
 CMD ["./startup.sh"]
+
+
+
