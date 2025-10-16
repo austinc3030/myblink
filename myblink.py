@@ -110,6 +110,7 @@ class myblink:
     # Blink Variables
     blink_retry_count = 0
     blink_retry_limit = 3
+    blink_initialized = False  # Track if Blink was successfully initialized
     no_snooze_syncs = ["Hobo Cams"]
     no_snooze_cams = ["Front Door"]
 
@@ -146,9 +147,20 @@ class myblink:
         self.init_logger()
         self.init_config()
         self.init_voipms()
-        self.init_blink()
+        
+        # Try to initialize Blink - if it fails, mark unhealthy but continue
+        # This allows the container to stay running for debugging
+        try:
+            self.init_blink()
+            self.blink_initialized = True
+            self.update_health_status(healthy=True, message="Application started successfully")
+        except Exception as e:
+            self.blink_initialized = False
+            self.logger.error(f"Failed to initialize Blink during startup: {e}")
+            self.update_health_status(healthy=False, message="Blink initialization failed at startup", error=e)
+            # Don't raise - let the app continue so healthcheck can report unhealthy
+        
         self.init_schedule()
-        self.update_health_status(healthy=True, message="Application started successfully")
 
     def __del__(self):
         """Cleanup method to close aiohttp sessions"""
@@ -282,6 +294,9 @@ class myblink:
                 
                 try:
                     await self.blink.start()
+                    # Verify authentication was successful
+                    if not self.blink.available:
+                        raise Exception("Blink authentication failed - service not available")
                 except Exception as e:
                     self.logger.warning(f"Saved credentials failed: {e}, trying fresh login")
                     # Clear saved credentials and try fresh login
@@ -301,6 +316,11 @@ class myblink:
                 self.blink.auth = Auth(auth_info, no_prompt=True)
                 await self.blink.start()
 
+            # Verify Blink is available after start
+            if not self.blink.available:
+                self.logger.error("Blink authentication failed - service not available after start()")
+                raise Exception("Blink authentication failed - service not available")
+
             # Check if 2FA key is required (handle API changes)
             if hasattr(self.blink, 'key_required') and self.blink.key_required:
                 self.logger.info("2FA required, waiting for SMS code")
@@ -314,8 +334,13 @@ class myblink:
                     self.logger.error("Failed to receive 2FA code from SMS")
                     raise Exception("2FA code not received")
 
-            # Save successful credentials
-            if hasattr(self.blink.auth, 'login_attributes'):
+            # Verify we have cameras/syncs
+            if not self.blink.sync and not self.blink.cameras:
+                self.logger.error("No Blink sync modules or cameras found after authentication")
+                raise Exception("No Blink devices found - authentication may have failed")
+
+            # Save successful credentials only if authentication actually worked
+            if hasattr(self.blink.auth, 'login_attributes') and self.blink.available:
                 self.config["blink"]["blinkpy_conf"] = json.dumps(
                     self.blink.auth.login_attributes, indent=4
                 )
@@ -377,7 +402,13 @@ class myblink:
                 
                 # Update health status every 30 seconds to show we're alive
                 if health_timer >= 30:
-                    if self.consecutive_errors >= self.max_consecutive_errors:
+                    # Check if Blink was never initialized
+                    if not self.blink_initialized:
+                        self.update_health_status(
+                            healthy=False,
+                            message="Blink failed to initialize - container is unhealthy"
+                        )
+                    elif self.consecutive_errors >= self.max_consecutive_errors:
                         self.update_health_status(
                             healthy=False,
                             message=f"Too many consecutive errors: {self.consecutive_errors}"

@@ -39,6 +39,8 @@ docker run -d \
 
 The container includes a comprehensive healthcheck system that monitors the application's actual health status, not just whether the process is running.
 
+**Important:** The healthcheck will correctly mark the container as **unhealthy** if Blink initialization fails, even if the process is still running. This allows Docker orchestration tools to detect and restart failed containers.
+
 ### How It Works
 
 1. **Health Status Tracking**: `myblink.py` continuously writes its health status to `/tmp/myblink_health.json`
