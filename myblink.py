@@ -80,19 +80,25 @@ def async_to_sync(func):
     @catch_exceptions(cancel_on_failure=False)
     @wraps(func)
     def wrapper(*args, **kwargs):
+        # Check if we're already in a running event loop
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
             # We're already in an event loop - shouldn't happen in our case
             raise RuntimeError("Cannot call async_to_sync from within a running loop")
-        except RuntimeError:
-            # No event loop running, create a new one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            # Create a coroutine and wrap it in ensure_future to create a task
-            coro = func(*args, **kwargs)
-            task = asyncio.ensure_future(coro, loop=loop)
-            return loop.run_until_complete(task)
+        except RuntimeError as e:
+            # Check if it's the "no running event loop" error (which is expected)
+            if "no running event loop" not in str(e).lower():
+                # Different RuntimeError, re-raise it
+                raise
+        
+        # No event loop running, create a new one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Create a coroutine and wrap it in ensure_future to create a task
+        coro = func(*args, **kwargs)
+        task = asyncio.ensure_future(coro, loop=loop)
+        return loop.run_until_complete(task)
     return wrapper
 
 
