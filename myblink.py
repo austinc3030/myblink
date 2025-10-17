@@ -66,10 +66,15 @@ def blink_retry(retry_limit_attr):
             for attempt in range(retry_limit):
                 try:
                     return func(self, *args, **kwargs)
+                except BlinkTwoFARequiredError as e:
+                    if attempt >= retry_limit - 1:
+                        raise Exception(f"Failed after {retry_limit} attempts: 2FA required") from e
+                    self.logger.info(f"2FA required during {func.__name__}, reinitializing Blink (attempt {attempt + 1}/{retry_limit})...")
+                    self.reinit_blink()
                 except Exception as e:
                     if attempt >= retry_limit - 1:
                         raise Exception(f"Failed after {retry_limit} attempts") from e
-                    self.logger.warning(f"Attempt {attempt + 1} failed, reinitializing Blink...")
+                    self.logger.warning(f"Attempt {attempt + 1}/{retry_limit} failed for {func.__name__}, reinitializing Blink...")
                     self.reinit_blink()
         return wrapper
     return decorator
