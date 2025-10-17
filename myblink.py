@@ -14,7 +14,7 @@ from functools import wraps
 from logging.handlers import RotatingFileHandler
 
 from aiohttp import ClientSession
-from blinkpy.auth import Auth
+from blinkpy.auth import Auth, BlinkTwoFARequiredError
 from blinkpy.blinkpy import Blink
 from voipms import VoipMs
 
@@ -402,6 +402,8 @@ class MyBlink:
                         return
                     else:
                         self.logger.warning("Cached credentials failed or expired, falling back to fresh login")
+                except BlinkTwoFARequiredError:
+                    self.logger.info("Cached credentials require 2FA, falling back to fresh login")
                 except Exception as e:
                     self.logger.warning(f"Error using cached credentials: {e}, falling back to fresh login")
 
@@ -424,8 +426,12 @@ class MyBlink:
 
             # Attempt initial login
             self.logger.info("Starting Blink authentication")
-            result = await self.blink.start()
-            self.logger.info(f"Blink.start() result: {result}, available: {self.blink.available}")
+            try:
+                result = await self.blink.start()
+                self.logger.info(f"Blink.start() result: {result}, available: {self.blink.available}")
+            except BlinkTwoFARequiredError:
+                self.logger.info("2FA required during initial login")
+                # The exception will be handled below
 
             # Handle 2FA if needed
             if not self.blink.available:
