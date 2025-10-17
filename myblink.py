@@ -19,6 +19,17 @@ from blinkpy.blinkpy import Blink
 from voipms import VoipMs
 
 
+def mask_email(email):
+    """Mask email address for logging purposes."""
+    if not email or '@' not in email:
+        return email
+    local, domain = email.split('@', 1)
+    # Show first 2 chars of local part and first char of domain
+    masked_local = local[:2] + '***' if len(local) > 2 else '***'
+    masked_domain = domain[0] + '***' if domain else '***'
+    return f"{masked_local}@{masked_domain}"
+
+
 def catch_exceptions(cancel_on_failure=False):
     """Decorator to catch and log exceptions in scheduled jobs."""
     def decorator(job_func):
@@ -74,15 +85,9 @@ def async_to_sync(func):
             # We're already in an event loop - shouldn't happen in our case
             raise RuntimeError("Cannot call async_to_sync from within a running loop")
         except RuntimeError:
-            # No event loop running, get or create the event loop
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_closed():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            # No event loop running, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             
             # Create a coroutine and wrap it in ensure_future to create a task
             coro = func(*args, **kwargs)
@@ -189,6 +194,11 @@ class MyBlink:
         self.logger = logging.getLogger()
         self.logger.setLevel(self.LOG_LEVEL)
         self.logger.addHandler(handler)
+        
+        # Prevent urllib3 from logging credentials in URLs
+        # Set urllib3 to WARNING level to avoid DEBUG logs with sensitive data
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+        logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
 
     def _load_config(self):
         """Load configuration from JSON file."""
@@ -403,7 +413,7 @@ class MyBlink:
                 "password": self.config["blink"]["password"],
             }
             
-            self.logger.info(f"Creating Auth for user: {auth_info['username']}")
+            self.logger.info(f"Creating Auth for user: {mask_email(auth_info['username'])}")
             self.blink.auth = Auth(auth_info, no_prompt=True, session=session)
 
             # Attempt initial login
