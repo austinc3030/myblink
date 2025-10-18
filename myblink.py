@@ -526,12 +526,42 @@ class MyBlink:
         schedule.every().hour.at(":00").do(self.rearm_cameras)
         schedule.every().hour.at(":00").do(self.snooze_cameras)
 
-    def _run_all_jobs(self):
-        """Run all scheduled jobs immediately."""
+    @async_to_sync
+    async def _run_all_jobs_async(self):
+        """Run all scheduled jobs immediately (async version for startup)."""
         self.logger.info("Running all scheduled jobs on startup")
-        self.update_thumbnails()
-        self.rearm_cameras()
-        self.snooze_cameras()
+        
+        # Run update_thumbnails
+        try:
+            for name, camera in self.blink.cameras.items():
+                await camera.snap_picture()
+            self.update_health_status(healthy=True, message="update_thumbnails executed successfully")
+        except Exception as e:
+            self.logger.exception("Exception in update_thumbnails")
+            self.update_health_status(healthy=False, message="Exception in update_thumbnails", error=e)
+        
+        # Run rearm_cameras
+        try:
+            for sync_name, sync in self.blink.sync.items():
+                await sync.async_arm(True)
+            self.update_health_status(healthy=True, message="rearm_cameras executed successfully")
+        except Exception as e:
+            self.logger.exception("Exception in rearm_cameras")
+            self.update_health_status(healthy=False, message="Exception in rearm_cameras", error=e)
+        
+        # Run snooze_cameras
+        try:
+            for sync_name, sync in self.blink.sync.items():
+                if sync_name in self.NO_SNOOZE_SYNCS:
+                    continue
+                for camera_name, camera in sync.cameras.items():
+                    if camera_name not in self.NO_SNOOZE_CAMS:
+                        await camera.async_snooze()
+            self.update_health_status(healthy=True, message="snooze_cameras executed successfully")
+        except Exception as e:
+            self.logger.exception("Exception in snooze_cameras")
+            self.update_health_status(healthy=False, message="Exception in snooze_cameras", error=e)
+        
         self.logger.info("Completed all scheduled jobs on startup")
 
     def run(self):
@@ -544,7 +574,7 @@ class MyBlink:
 
         # Run all jobs immediately on startup
         if self.blink_initialized:
-            self._run_all_jobs()
+            self._run_all_jobs_async()
         else:
             self.logger.warning("Blink not initialized, skipping initial job run")
 
