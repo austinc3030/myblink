@@ -613,6 +613,25 @@ class MyBlink:
                 self.logger.info("Closed aiohttp session")
         except Exception as e:
             self.logger.warning(f"Error closing session: {e}")
+    
+    async def _create_new_session_async(self):
+        """Create a new aiohttp session for the current event loop."""
+        # Close old session if it exists and is from a different loop
+        if (
+            hasattr(self.blink, 'auth')
+            and hasattr(self.blink.auth, 'session')
+            and self.blink.auth.session
+        ):
+            try:
+                if not self.blink.auth.session.closed:
+                    await self.blink.auth.session.close()
+            except Exception as e:
+                self.logger.debug(f"Error closing old session: {e}")
+        
+        # Create new session in current event loop
+        new_session = ClientSession()
+        self.blink.auth.session = new_session
+        return new_session
 
     def reinit_blink(self):
         """Reinitialize Blink connection."""
@@ -625,6 +644,7 @@ class MyBlink:
     @async_to_sync
     async def update_thumbnails(self):
         """Update camera thumbnails."""
+        await self._create_new_session_async()
         for name, camera in self.blink.cameras.items():
             await camera.snap_picture()
 
@@ -633,6 +653,7 @@ class MyBlink:
     @async_to_sync
     async def rearm_cameras(self):
         """Rearm all camera sync modules."""
+        await self._create_new_session_async()
         for sync_name, sync in self.blink.sync.items():
             await sync.async_arm(True)
 
@@ -641,6 +662,7 @@ class MyBlink:
     @async_to_sync
     async def snooze_cameras(self):
         """Snooze cameras (except excluded ones)."""
+        await self._create_new_session_async()
         for sync_name, sync in self.blink.sync.items():
             if sync_name in self.NO_SNOOZE_SYNCS:
                 continue
