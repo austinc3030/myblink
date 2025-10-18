@@ -176,7 +176,7 @@ class MyBlink:
         self._init_logger()
         self._load_config()
         self._init_voipms()
-        self._init_blink_safe()
+        self._init_blink_and_run_jobs()
         self._init_schedule()
 
     def __del__(self):
@@ -466,6 +466,134 @@ class MyBlink:
                 message="Blink initialization failed at startup",
                 error=e
             )
+    
+    def _init_blink_and_run_jobs(self):
+        """Initialize Blink and run startup jobs in the same event loop."""
+        try:
+            # Create a new event loop for both initialization and startup jobs
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Run initialization and startup jobs in the same loop
+            loop.run_until_complete(self._init_and_run_async())
+            
+            self.blink_initialized = True
+            self.update_health_status(healthy=True, message="Application started successfully")
+        except Exception as e:
+            self.blink_initialized = False
+            self.logger.error(f"Failed to initialize Blink during startup: {e}")
+            self.update_health_status(
+                healthy=False,
+                message="Blink initialization failed at startup",
+                error=e
+            )
+    
+    async def _init_and_run_async(self):
+        """Initialize Blink and run startup jobs (async)."""
+        # Initialize Blink (copied from init_blink but without @async_to_sync)
+        self._delete_blink_messages()
+
+        # Create session and Blink instance
+        session = ClientSession()
+        self.blink = Blink(session=session)
+
+        # Try cached credentials first
+        if self.config["blink"]["blinkpy_conf"]:
+            self.logger.info("Attempting login with cached credentials")
+            try:
+                cached_auth = json.loads(self.config["blink"]["blinkpy_conf"])
+                self.blink.auth = Auth(cached_auth, no_prompt=True, session=session)
+                
+                result = await self.blink.start()
+                self.logger.info(f"Cached credentials result: {result}, available: {self.blink.available}")
+                
+                if self.blink.available:
+                    self.logger.info("Successfully authenticated with cached credentials")
+                    await self._verify_and_save_blink()
+                    self.update_health_status(healthy=True, message="Blink initialized with cached credentials")
+                    self.logger.info("Blink initialization complete")
+                else:
+                    self.logger.warning("Cached credentials failed or expired, falling back to fresh login")
+                    await self._fresh_login(session)
+            except BlinkTwoFARequiredError:
+                self.logger.info("Cached credentials require 2FA, falling back to fresh login")
+                await self._fresh_login(session)
+            except Exception as e:
+                self.logger.warning(f"Error using cached credentials: {e}, falling back to fresh login")
+                await self._fresh_login(session)
+        else:
+            await self._fresh_login(session)
+
+        # Now run startup jobs in the same event loop
+        self.logger.info("Running all scheduled jobs on startup")
+        await self._run_startup_jobs_async()
+        self.logger.info("Completed all scheduled jobs on startup")
+    
+    async def _fresh_login(self, session):
+        """Perform fresh login with username/password."""
+        self.logger.info("Performing fresh login")
+        
+        # Clear failed cached credentials
+        if self.config["blink"]["blinkpy_conf"]:
+            self.config["blink"]["blinkpy_conf"] = ""
+            self._save_config()
+
+        # Create auth with username/password
+        auth_info = {
+            "username": self.config["blink"]["username"],
+            "password": self.config["blink"]["password"],
+        }
+        
+        self.logger.info(f"Creating Auth for user: {mask_email(auth_info['username'])}")
+        self.blink.auth = Auth(auth_info, no_prompt=True, session=session)
+
+        # Attempt initial login
+        self.logger.info("Starting Blink authentication")
+        try:
+            result = await self.blink.start()
+            self.logger.info(f"Blink.start() result: {result}, available: {self.blink.available}")
+        except BlinkTwoFARequiredError:
+            self.logger.info("2FA required during initial login")
+
+        # Handle 2FA if needed
+        if not self.blink.available:
+            await self._handle_2fa_authentication(session)
+
+        # Verify and save
+        await self._verify_and_save_blink()
+        
+        self.update_health_status(healthy=True, message="Blink initialized successfully")
+        self.logger.info("Blink initialization complete")
+    
+    async def _run_startup_jobs_async(self):
+        """Run all scheduled jobs on startup (async, same event loop as init)."""
+        # Run update_thumbnails
+        try:
+            for name, camera in self.blink.cameras.items():
+                await camera.snap_picture()
+            self.logger.info("update_thumbnails executed successfully")
+        except Exception as e:
+            self.logger.exception("Exception in update_thumbnails")
+        
+        # Run rearm_cameras
+        try:
+            for sync_name, sync in self.blink.sync.items():
+                await sync.async_arm(True)
+            self.logger.info("rearm_cameras executed successfully")
+        except Exception as e:
+            self.logger.exception("Exception in rearm_cameras")
+        
+        # Run snooze_cameras
+        try:
+            for sync_name, sync in self.blink.sync.items():
+                if sync_name in self.NO_SNOOZE_SYNCS:
+                    continue
+                for camera_name, camera in sync.cameras.items():
+                    if camera_name not in self.NO_SNOOZE_CAMS:
+                        await camera.async_snooze()
+            self.logger.info("snooze_cameras executed successfully")
+        except Exception as e:
+            self.logger.exception("Exception in snooze_cameras")
 
     def _close_session(self):
         """Close aiohttp session if open."""
@@ -526,44 +654,6 @@ class MyBlink:
         schedule.every().hour.at(":00").do(self.rearm_cameras)
         schedule.every().hour.at(":00").do(self.snooze_cameras)
 
-    @async_to_sync
-    async def _run_all_jobs_async(self):
-        """Run all scheduled jobs immediately (async version for startup)."""
-        self.logger.info("Running all scheduled jobs on startup")
-        
-        # Run update_thumbnails
-        try:
-            for name, camera in self.blink.cameras.items():
-                await camera.snap_picture()
-            self.update_health_status(healthy=True, message="update_thumbnails executed successfully")
-        except Exception as e:
-            self.logger.exception("Exception in update_thumbnails")
-            self.update_health_status(healthy=False, message="Exception in update_thumbnails", error=e)
-        
-        # Run rearm_cameras
-        try:
-            for sync_name, sync in self.blink.sync.items():
-                await sync.async_arm(True)
-            self.update_health_status(healthy=True, message="rearm_cameras executed successfully")
-        except Exception as e:
-            self.logger.exception("Exception in rearm_cameras")
-            self.update_health_status(healthy=False, message="Exception in rearm_cameras", error=e)
-        
-        # Run snooze_cameras
-        try:
-            for sync_name, sync in self.blink.sync.items():
-                if sync_name in self.NO_SNOOZE_SYNCS:
-                    continue
-                for camera_name, camera in sync.cameras.items():
-                    if camera_name not in self.NO_SNOOZE_CAMS:
-                        await camera.async_snooze()
-            self.update_health_status(healthy=True, message="snooze_cameras executed successfully")
-        except Exception as e:
-            self.logger.exception("Exception in snooze_cameras")
-            self.update_health_status(healthy=False, message="Exception in snooze_cameras", error=e)
-        
-        self.logger.info("Completed all scheduled jobs on startup")
-
     def run(self):
         """Main application loop."""
         log_timer = 0
@@ -571,12 +661,6 @@ class MyBlink:
         log_interval = self.MIN_TO_NEXT_STATUS * 60
 
         self.logger.info("Starting main application loop")
-
-        # Run all jobs immediately on startup
-        if self.blink_initialized:
-            self._run_all_jobs_async()
-        else:
-            self.logger.warning("Blink not initialized, skipping initial job run")
 
         while True:
             try:
