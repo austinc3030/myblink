@@ -138,7 +138,6 @@ class MyBlink:
 
     # Schedule settings
     MIN_TO_NEXT_STATUS = 1  # minutes
-    RUN_ON_START = os.environ.get("RUN_ON_START", "false").lower() == "true"
 
     class CustomRotatingFileHandler(RotatingFileHandler):
         """Custom file handler with timestamp-based rotation."""
@@ -543,13 +542,11 @@ class MyBlink:
 
         self.logger.info("Starting main application loop")
 
-        # Run all jobs immediately if RUN_ON_START is enabled
-        if self.RUN_ON_START:
-            self.logger.info("RUN_ON_START is enabled")
-            if self.blink_initialized:
-                self._run_all_jobs()
-            else:
-                self.logger.warning("Blink not initialized, skipping initial job run")
+        # Run all jobs immediately on startup
+        if self.blink_initialized:
+            self._run_all_jobs()
+        else:
+            self.logger.warning("Blink not initialized, skipping initial job run")
 
         while True:
             try:
