@@ -44,7 +44,9 @@ def catch_exceptions(cancel_on_failure=False):
                     )
                 return result
             except Exception as e:
-                logging.exception(f"Exception in {job_func.__name__}")
+                # Use the logger from the instance if available, otherwise use root logger
+                logger = args[0].logger if hasattr(args[0], 'logger') else logging.getLogger()
+                logger.exception(f"Exception in {job_func.__name__}: {e}")
                 if hasattr(args[0], 'update_health_status'):
                     args[0].update_health_status(
                         healthy=False,
@@ -63,26 +65,32 @@ def blink_retry(retry_limit_attr):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
             retry_limit = getattr(self, retry_limit_attr)
+            last_exception = None
             for attempt in range(retry_limit):
                 try:
                     return func(self, *args, **kwargs)
                 except BlinkTwoFARequiredError as e:
+                    last_exception = e
                     if attempt >= retry_limit - 1:
+                        self.logger.error(f"Failed after {retry_limit} attempts in {func.__name__}: 2FA required")
                         raise Exception(f"Failed after {retry_limit} attempts: 2FA required") from e
                     self.logger.info(f"2FA required during {func.__name__}, reinitializing Blink (attempt {attempt + 1}/{retry_limit})...")
                     self.reinit_blink()
                 except Exception as e:
+                    last_exception = e
                     if attempt >= retry_limit - 1:
+                        self.logger.error(f"Failed after {retry_limit} attempts in {func.__name__}: {e}")
                         raise Exception(f"Failed after {retry_limit} attempts") from e
-                    self.logger.warning(f"Attempt {attempt + 1}/{retry_limit} failed for {func.__name__}, reinitializing Blink...")
+                    self.logger.warning(f"Attempt {attempt + 1}/{retry_limit} failed for {func.__name__}: {e}, reinitializing Blink...")
                     self.reinit_blink()
+            # This shouldn't be reached, but just in case
+            raise Exception(f"Failed after {retry_limit} attempts") from last_exception
         return wrapper
     return decorator
 
 
 def async_to_sync(func):
     """Decorator to run async functions in sync context."""
-    @catch_exceptions(cancel_on_failure=False)
     @wraps(func)
     def wrapper(*args, **kwargs):
         # Check if we're already in a running event loop
@@ -100,10 +108,24 @@ def async_to_sync(func):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Create a coroutine and wrap it in ensure_future to create a task
-        coro = func(*args, **kwargs)
-        task = asyncio.ensure_future(coro, loop=loop)
-        return loop.run_until_complete(task)
+        try:
+            # Create a coroutine and wrap it in ensure_future to create a task
+            coro = func(*args, **kwargs)
+            task = asyncio.ensure_future(coro, loop=loop)
+            result = loop.run_until_complete(task)
+            return result
+        finally:
+            # Clean up the loop
+            try:
+                # Cancel any pending tasks
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                # Run loop briefly to allow cancellations to complete
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
     return wrapper
 
 
@@ -644,31 +666,49 @@ class MyBlink:
     @async_to_sync
     async def update_thumbnails(self):
         """Update camera thumbnails."""
+        self.logger.info("Starting update_thumbnails job")
         await self._create_new_session_async()
+        update_count = 0
         for name, camera in self.blink.cameras.items():
+            self.logger.info(f"Updating thumbnail for camera '{name}'")
             await camera.snap_picture()
+            update_count += 1
+        self.logger.info(f"Updated {update_count} thumbnail(s)")
 
     @catch_exceptions(cancel_on_failure=False)
     @blink_retry("BLINK_RETRY_LIMIT")
     @async_to_sync
     async def rearm_cameras(self):
         """Rearm all camera sync modules."""
+        self.logger.info("Starting rearm_cameras job")
         await self._create_new_session_async()
+        rearm_count = 0
         for sync_name, sync in self.blink.sync.items():
+            self.logger.info(f"Rearming sync module '{sync_name}'")
             await sync.async_arm(True)
+            rearm_count += 1
+        self.logger.info(f"Rearmed {rearm_count} sync module(s)")
 
     @catch_exceptions(cancel_on_failure=False)
     @blink_retry("BLINK_RETRY_LIMIT")
     @async_to_sync
     async def snooze_cameras(self):
         """Snooze cameras (except excluded ones)."""
+        self.logger.info("Starting snooze_cameras job")
         await self._create_new_session_async()
+        snoozed_count = 0
         for sync_name, sync in self.blink.sync.items():
             if sync_name in self.NO_SNOOZE_SYNCS:
+                self.logger.info(f"Skipping sync '{sync_name}' (in NO_SNOOZE_SYNCS list)")
                 continue
             for camera_name, camera in sync.cameras.items():
                 if camera_name not in self.NO_SNOOZE_CAMS:
+                    self.logger.info(f"Snoozing camera '{camera_name}' in sync '{sync_name}'")
                     await camera.async_snooze()
+                    snoozed_count += 1
+                else:
+                    self.logger.info(f"Skipping camera '{camera_name}' (in NO_SNOOZE_CAMS list)")
+        self.logger.info(f"Snoozed {snoozed_count} camera(s)")
 
     def _init_schedule(self):
         """Initialize scheduled tasks."""
