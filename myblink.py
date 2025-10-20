@@ -133,7 +133,8 @@ class MyBlink:
     """Main class for Blink camera automation with VoIP.ms 2FA."""
 
     # Logging configuration
-    LOG_LEVEL = logging.DEBUG
+    DEBUG_MODE = os.getenv("DEBUG", "false").lower() in ("true", "1", "yes")
+    LOG_LEVEL = logging.DEBUG if DEBUG_MODE else logging.INFO
     LOG_FILE = "stdout"
     LOG_SIZE = 10 * 1024 * 1024  # 10MB
     LOG_COUNT = 5
@@ -231,6 +232,12 @@ class MyBlink:
         # Set urllib3 to WARNING level to avoid DEBUG logs with sensitive data
         logging.getLogger("urllib3").setLevel(logging.WARNING)
         logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+        
+        # Log the current debug mode status
+        if self.DEBUG_MODE:
+            self.logger.info("DEBUG mode enabled - verbose logging active")
+        else:
+            self.logger.info("DEBUG mode disabled - showing status messages only")
 
     def _load_config(self):
         """Load configuration from JSON file."""
@@ -287,7 +294,7 @@ class MyBlink:
 
     def get_blink_code(self):
         """Retrieve 2FA code from VoIP.ms SMS messages."""
-        self.logger.info(f"Attempting to retrieve 2FA code (up to {self.VOIPMS_RETRY_LIMIT} retries)")
+        self.logger.debug(f"Attempting to retrieve 2FA code (up to {self.VOIPMS_RETRY_LIMIT} retries)")
         
         for attempt in range(self.VOIPMS_RETRY_LIMIT):
             sms_messages = self._get_sms_messages()
@@ -316,7 +323,7 @@ class MyBlink:
                 match = re.search(r"\d{6}", blink_msgs[0]["message"])
                 if match:
                     code = match.group()
-                    self.logger.info(f"Successfully extracted 2FA code: {code}")
+                    self.logger.debug(f"Successfully extracted 2FA code: {code}")
                     return code
             elif len(blink_msgs) > 1:
                 self.logger.warning(f"Found {len(blink_msgs)} Blink messages, expected 1")
@@ -368,18 +375,18 @@ class MyBlink:
 
     async def _handle_2fa_authentication(self, session):
         """Handle 2FA authentication flow."""
-        self.logger.info("2FA required, waiting for SMS code")
+        self.logger.debug("2FA required, waiting for SMS code")
         await asyncio.sleep(self.VOIPMS_SMS_WAIT)
 
         blink_code = self.get_blink_code()
         if not blink_code:
             raise Exception("2FA code not received from VoIP.ms")
 
-        self.logger.info(f"Retrieved 2FA code: {blink_code}")
+        self.logger.debug(f"Retrieved 2FA code: {blink_code}")
         self.blink.auth.data["2fa_code"] = blink_code
 
         # Retry login with 2FA code
-        self.logger.info("Retrying login with 2FA code")
+        self.logger.debug("Retrying login with 2FA code")
         login_response = await self.blink.auth.login()
         
         if not login_response:
@@ -398,7 +405,7 @@ class MyBlink:
         await self.blink.get_homescreen()
         await self.blink.setup_post_verify()
         
-        self.logger.info(f"2FA authentication complete, available: {self.blink.available}")
+        self.logger.debug(f"2FA authentication complete, available: {self.blink.available}")
 
     @async_to_sync
     async def init_blink(self):
@@ -412,29 +419,29 @@ class MyBlink:
 
             # Try cached credentials first
             if self.config["blink"]["blinkpy_conf"]:
-                self.logger.info("Attempting login with cached credentials")
+                self.logger.debug("Attempting login with cached credentials")
                 try:
                     cached_auth = json.loads(self.config["blink"]["blinkpy_conf"])
                     self.blink.auth = Auth(cached_auth, no_prompt=True, session=session)
                     
                     result = await self.blink.start()
-                    self.logger.info(f"Cached credentials result: {result}, available: {self.blink.available}")
+                    self.logger.debug(f"Cached credentials result: {result}, available: {self.blink.available}")
                     
                     if self.blink.available:
-                        self.logger.info("Successfully authenticated with cached credentials")
+                        self.logger.debug("Successfully authenticated with cached credentials")
                         await self._verify_and_save_blink()
                         self.update_health_status(healthy=True, message="Blink initialized with cached credentials")
-                        self.logger.info("Blink initialization complete")
+                        self.logger.debug("Blink initialization complete")
                         return
                     else:
-                        self.logger.warning("Cached credentials failed or expired, falling back to fresh login")
+                        self.logger.debug("Cached credentials failed or expired, falling back to fresh login")
                 except BlinkTwoFARequiredError:
-                    self.logger.info("Cached credentials require 2FA, falling back to fresh login")
+                    self.logger.debug("Cached credentials require 2FA, falling back to fresh login")
                 except Exception as e:
-                    self.logger.warning(f"Error using cached credentials: {e}, falling back to fresh login")
+                    self.logger.debug(f"Error using cached credentials: {e}, falling back to fresh login")
 
             # Fall back to fresh login with username/password
-            self.logger.info("Performing fresh login")
+            self.logger.debug("Performing fresh login")
             
             # Clear failed cached credentials
             if self.config["blink"]["blinkpy_conf"]:
@@ -447,16 +454,16 @@ class MyBlink:
                 "password": self.config["blink"]["password"],
             }
             
-            self.logger.info(f"Creating Auth for user: {mask_email(auth_info['username'])}")
+            self.logger.debug(f"Creating Auth for user: {mask_email(auth_info['username'])}")
             self.blink.auth = Auth(auth_info, no_prompt=True, session=session)
 
             # Attempt initial login
-            self.logger.info("Starting Blink authentication")
+            self.logger.debug("Starting Blink authentication")
             try:
                 result = await self.blink.start()
-                self.logger.info(f"Blink.start() result: {result}, available: {self.blink.available}")
+                self.logger.debug(f"Blink.start() result: {result}, available: {self.blink.available}")
             except BlinkTwoFARequiredError:
-                self.logger.info("2FA required during initial login")
+                self.logger.debug("2FA required during initial login")
                 # The exception will be handled below
 
             # Handle 2FA if needed
@@ -467,7 +474,7 @@ class MyBlink:
             await self._verify_and_save_blink()
             
             self.update_health_status(healthy=True, message="Blink initialized successfully")
-            self.logger.info("Blink initialization complete")
+            self.logger.debug("Blink initialization complete")
 
         except Exception as e:
             self.logger.exception(f"Failed to initialize Blink: {e}")
@@ -521,39 +528,39 @@ class MyBlink:
 
         # Try cached credentials first
         if self.config["blink"]["blinkpy_conf"]:
-            self.logger.info("Attempting login with cached credentials")
+            self.logger.debug("Attempting login with cached credentials")
             try:
                 cached_auth = json.loads(self.config["blink"]["blinkpy_conf"])
                 self.blink.auth = Auth(cached_auth, no_prompt=True, session=session)
                 
                 result = await self.blink.start()
-                self.logger.info(f"Cached credentials result: {result}, available: {self.blink.available}")
+                self.logger.debug(f"Cached credentials result: {result}, available: {self.blink.available}")
                 
                 if self.blink.available:
-                    self.logger.info("Successfully authenticated with cached credentials")
+                    self.logger.debug("Successfully authenticated with cached credentials")
                     await self._verify_and_save_blink()
                     self.update_health_status(healthy=True, message="Blink initialized with cached credentials")
-                    self.logger.info("Blink initialization complete")
+                    self.logger.debug("Blink initialization complete")
                 else:
-                    self.logger.warning("Cached credentials failed or expired, falling back to fresh login")
+                    self.logger.debug("Cached credentials failed or expired, falling back to fresh login")
                     await self._fresh_login(session)
             except BlinkTwoFARequiredError:
-                self.logger.info("Cached credentials require 2FA, falling back to fresh login")
+                self.logger.debug("Cached credentials require 2FA, falling back to fresh login")
                 await self._fresh_login(session)
             except Exception as e:
-                self.logger.warning(f"Error using cached credentials: {e}, falling back to fresh login")
+                self.logger.debug(f"Error using cached credentials: {e}, falling back to fresh login")
                 await self._fresh_login(session)
         else:
             await self._fresh_login(session)
 
         # Now run startup jobs in the same event loop
-        self.logger.info("Running all scheduled jobs on startup")
+        self.logger.debug("Running all scheduled jobs on startup")
         await self._run_startup_jobs_async()
-        self.logger.info("Completed all scheduled jobs on startup")
+        self.logger.debug("Completed all scheduled jobs on startup")
     
     async def _fresh_login(self, session):
         """Perform fresh login with username/password."""
-        self.logger.info("Performing fresh login")
+        self.logger.debug("Performing fresh login")
         
         # Clear failed cached credentials
         if self.config["blink"]["blinkpy_conf"]:
@@ -566,16 +573,16 @@ class MyBlink:
             "password": self.config["blink"]["password"],
         }
         
-        self.logger.info(f"Creating Auth for user: {mask_email(auth_info['username'])}")
+        self.logger.debug(f"Creating Auth for user: {mask_email(auth_info['username'])}")
         self.blink.auth = Auth(auth_info, no_prompt=True, session=session)
 
         # Attempt initial login
-        self.logger.info("Starting Blink authentication")
+        self.logger.debug("Starting Blink authentication")
         try:
             result = await self.blink.start()
-            self.logger.info(f"Blink.start() result: {result}, available: {self.blink.available}")
+            self.logger.debug(f"Blink.start() result: {result}, available: {self.blink.available}")
         except BlinkTwoFARequiredError:
-            self.logger.info("2FA required during initial login")
+            self.logger.debug("2FA required during initial login")
 
         # Handle 2FA if needed
         if not self.blink.available:
@@ -585,7 +592,7 @@ class MyBlink:
         await self._verify_and_save_blink()
         
         self.update_health_status(healthy=True, message="Blink initialized successfully")
-        self.logger.info("Blink initialization complete")
+        self.logger.debug("Blink initialization complete")
     
     async def _run_startup_jobs_async(self):
         """Run all scheduled jobs on startup (async, same event loop as init)."""
@@ -593,7 +600,8 @@ class MyBlink:
         try:
             for name, camera in self.blink.cameras.items():
                 await camera.snap_picture()
-            self.logger.info("update_thumbnails executed successfully")
+                self.logger.info(f"Thumbnail updated for {name}")
+            self.logger.debug("update_thumbnails executed successfully")
         except Exception as e:
             self.logger.exception("Exception in update_thumbnails")
         
@@ -601,7 +609,8 @@ class MyBlink:
         try:
             for sync_name, sync in self.blink.sync.items():
                 await sync.async_arm(True)
-            self.logger.info("rearm_cameras executed successfully")
+                self.logger.info(f"Armed {sync_name}")
+            self.logger.debug("rearm_cameras executed successfully")
         except Exception as e:
             self.logger.exception("Exception in rearm_cameras")
         
@@ -613,7 +622,8 @@ class MyBlink:
                 for camera_name, camera in sync.cameras.items():
                     if camera_name not in self.NO_SNOOZE_CAMS:
                         await camera.async_snooze()
-            self.logger.info("snooze_cameras executed successfully")
+                        self.logger.info(f"Snoozed {camera_name}")
+            self.logger.debug("snooze_cameras executed successfully")
         except Exception as e:
             self.logger.exception("Exception in snooze_cameras")
 
@@ -666,49 +676,52 @@ class MyBlink:
     @async_to_sync
     async def update_thumbnails(self):
         """Update camera thumbnails."""
-        self.logger.info("Starting update_thumbnails job")
+        self.logger.debug("Starting update_thumbnails job")
         await self._create_new_session_async()
         update_count = 0
         for name, camera in self.blink.cameras.items():
-            self.logger.info(f"Updating thumbnail for camera '{name}'")
+            self.logger.debug(f"Updating thumbnail for camera '{name}'")
             await camera.snap_picture()
+            self.logger.info(f"Thumbnail updated for {name}")
             update_count += 1
-        self.logger.info(f"Updated {update_count} thumbnail(s)")
+        self.logger.debug(f"Updated {update_count} thumbnail(s)")
 
     @catch_exceptions(cancel_on_failure=False)
     @blink_retry("BLINK_RETRY_LIMIT")
     @async_to_sync
     async def rearm_cameras(self):
         """Rearm all camera sync modules."""
-        self.logger.info("Starting rearm_cameras job")
+        self.logger.debug("Starting rearm_cameras job")
         await self._create_new_session_async()
         rearm_count = 0
         for sync_name, sync in self.blink.sync.items():
-            self.logger.info(f"Rearming sync module '{sync_name}'")
+            self.logger.debug(f"Rearming sync module '{sync_name}'")
             await sync.async_arm(True)
+            self.logger.info(f"Armed {sync_name}")
             rearm_count += 1
-        self.logger.info(f"Rearmed {rearm_count} sync module(s)")
+        self.logger.debug(f"Rearmed {rearm_count} sync module(s)")
 
     @catch_exceptions(cancel_on_failure=False)
     @blink_retry("BLINK_RETRY_LIMIT")
     @async_to_sync
     async def snooze_cameras(self):
         """Snooze cameras (except excluded ones)."""
-        self.logger.info("Starting snooze_cameras job")
+        self.logger.debug("Starting snooze_cameras job")
         await self._create_new_session_async()
         snoozed_count = 0
         for sync_name, sync in self.blink.sync.items():
             if sync_name in self.NO_SNOOZE_SYNCS:
-                self.logger.info(f"Skipping sync '{sync_name}' (in NO_SNOOZE_SYNCS list)")
+                self.logger.debug(f"Skipping sync '{sync_name}' (in NO_SNOOZE_SYNCS list)")
                 continue
             for camera_name, camera in sync.cameras.items():
                 if camera_name not in self.NO_SNOOZE_CAMS:
-                    self.logger.info(f"Snoozing camera '{camera_name}' in sync '{sync_name}'")
+                    self.logger.debug(f"Snoozing camera '{camera_name}' in sync '{sync_name}'")
                     await camera.async_snooze()
+                    self.logger.info(f"Snoozed {camera_name}")
                     snoozed_count += 1
                 else:
-                    self.logger.info(f"Skipping camera '{camera_name}' (in NO_SNOOZE_CAMS list)")
-        self.logger.info(f"Snoozed {snoozed_count} camera(s)")
+                    self.logger.debug(f"Skipping camera '{camera_name}' (in NO_SNOOZE_CAMS list)")
+        self.logger.debug(f"Snoozed {snoozed_count} camera(s)")
 
     def _init_schedule(self):
         """Initialize scheduled tasks."""
@@ -731,7 +744,7 @@ class MyBlink:
                 # Log next job ETA
                 next_job_eta = schedule.idle_seconds()
                 if next_job_eta is not None and log_timer == log_interval:
-                    self.logger.info(f"{next_job_eta:.0f} seconds until next job")
+                    self.logger.debug(f"{next_job_eta:.0f} seconds until next job")
                 log_timer = (log_timer + 1) if log_timer <= log_interval else 0
 
                 # Update health status periodically
