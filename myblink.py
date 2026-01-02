@@ -382,22 +382,15 @@ class MyBlink:
             raise Exception("2FA code not received from VoIP.ms")
 
         self.logger.debug(f"Retrieved 2FA code: {blink_code}")
-        self.blink.auth.data["2fa_code"] = blink_code
 
-        # Retry login with 2FA code
-        self.logger.debug("Retrying login with 2FA code")
-        login_response = await self.blink.auth.login()
+        # Complete OAuth v2 login with 2FA code
+        self.logger.debug("Completing OAuth v2 login with 2FA code")
+        success = await self.blink.auth.complete_2fa_login(blink_code)
         
-        if not login_response:
-            raise Exception("Login with 2FA failed")
+        if not success:
+            raise Exception("2FA login completion failed")
 
-        # Save and extract login information
-        self.blink.auth.login_response = login_response
-        self.logger.debug(f"Login response keys: {list(login_response.keys())}")
-        
-        self.blink.auth.extract_login_info()
-        self.blink.auth.tier_info = await self.blink.auth.get_tier_info()
-        self.blink.auth.extract_tier_info()
+        self.logger.debug("2FA verification successful, completing Blink setup")
         
         # Complete setup
         self.blink.setup_urls()
