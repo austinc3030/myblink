@@ -313,7 +313,6 @@ class MyBlink:
                 if (
                     msg["type"] == "1"
                     and msg["did"] == self.config["voipms"]["did"]
-                    and len(msg["contact"]) == 5
                     and self.VOIPMS_MSG_STR in msg["message"]
                 )
             ]
