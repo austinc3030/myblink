@@ -140,7 +140,7 @@ class MyBlink:
     LOG_COUNT = 5
 
     # File paths
-    CONFIG_FILE = "/app/config.json"
+    CONFIG_FILE = "/myblink/config.json"
     HEALTH_FILE = "/tmp/myblink_health.json"
 
     # Health check settings
