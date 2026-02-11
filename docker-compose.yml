@@ -1,0 +1,35 @@
+services:
+  myblink:
+    build: .
+    container_name: myblink
+    volumes:
+      # Persistent volume for config and credentials
+      - myblink-data:/data
+    ports:
+      # Web interface port (required for setup and management)
+      - "8080:8080"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python3", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    environment:
+      # Web server configuration
+      - WEB_PORT=8080
+      - WEB_HOST=0.0.0.0
+      # Config file paths (stored in persistent volume)
+      - MYBLINK_CONFIG=/data/config.yaml
+      - MYBLINK_CREDS=/data/credentials.json
+      # Timezone
+      - TZ=America/New_York  # Set your timezone
+
+volumes:
+  myblink-data:
+    driver: local
+
+# Note: On first startup, access http://localhost:8080 to configure credentials
+# All setup is done through the web interface - no manual file editing needed!
+# Config and credentials are stored in Docker volume 'myblink-data' for persistence

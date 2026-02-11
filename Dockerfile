@@ -6,15 +6,18 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-# Copy everything (excluding items in .dockerignore)
-COPY . /app
+# Copy app directory contents
+COPY app/ /app/
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r /app/requirements.txt
 
 # Make scripts executable
 RUN chmod +x /app/startup.sh /app/healthcheck.py
+
+# Create data directory for persistent config and credentials
+RUN mkdir -p /data
 
 # Add healthcheck
 # Runs every 30 seconds, starts checking after 60 seconds, 
@@ -22,6 +25,18 @@ RUN chmod +x /app/startup.sh /app/healthcheck.py
 # marks unhealthy after 3 consecutive failures
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python3 /app/healthcheck.py || exit 1
+
+# Environment variables (can be overridden at runtime)
+ENV WEB_PORT=8080 \
+    WEB_HOST=0.0.0.0 \
+    MYBLINK_CONFIG=/data/config.yaml \
+    MYBLINK_CREDS=/data/credentials.json
+
+# Expose web interface port
+EXPOSE 8080
+
+# Use SIGTERM for graceful shutdown
+STOPSIGNAL SIGTERM
 
 # Set entry point
 CMD ["./startup.sh"]

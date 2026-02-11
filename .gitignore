@@ -1,6 +1,37 @@
-# Ignore some python stuff
-.venv
-__pycache__
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
 
-# vscode
-.vscode
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# User configuration files (don't commit credentials!)
+app/config.yaml
+app/credentials.yaml
+config.json
+credentials.yaml
+config.yaml
+
+# Health status
+/tmp/myblink_health.json
+
+# Logs
+*.log

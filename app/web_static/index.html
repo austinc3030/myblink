@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#2563eb">
+    <title>MyBlink - Camera Management</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" href="/static/icon-192.png">
+    <link rel="apple-touch-icon" href="/static/icon-192.png">
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --surface: #ffffff;
+            --surface-alt: #f3f4f6;
+            --border: #e5e7eb;
+            --text: #111827;
+            --text-secondary: #6b7280;
+            --success: #10b981;
+            --error: #ef4444;
+            --shadow: rgba(0, 0, 0, 0.1);
+        }
+        
+        [data-theme="dark"] {
+            --primary: #3b82f6;
+            --primary-dark: #2563eb;
+            --surface: #1f2937;
+            --surface-alt: #111827;
+            --border: #374151;
+            --text: #f9fafb;
+            --text-secondary: #9ca3af;
+            --success: #34d399;
+            --error: #f87171;
+            --shadow: rgba(0, 0, 0, 0.3);
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: var(--surface-alt);
+            color: var(--text);
+            line-height: 1.6;
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+        
+        .header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 2px 4px var(--shadow);
+        }
+        
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.2s;
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn:hover {
+            background: var(--primary-dark);
+        }
+        
+        .btn:active {
+            transform: scale(0.98);
+        }
+        
+        .btn-secondary {
+            background: var(--surface-alt);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        
+        .btn-secondary:hover {
+            background: var(--border);
+        }
+        
+        .theme-toggle {
+            width: 2.5rem;
+            height: 2.5rem;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            background: var(--surface-alt);
+            border: 1px solid var(--border);
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 1rem;
+        }
+        
+        .sync-module {
+            background: var(--surface);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px var(--shadow);
+        }
+        
+        .sync-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        
+        .sync-name {
+            font-size: 1.25rem;
+            font-weight: 600;
+            flex: 1;
+            min-width: 200px;
+        }
+        
+        .sync-toggles {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        
+        .toggle-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .toggle-label {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            user-select: none;
+        }
+        
+        .toggle {
+            position: relative;
+            width: 48px;
+            height: 24px;
+        }
+        
+        .toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border);
+            transition: 0.2s;
+            border-radius: 24px;
+        }
+        
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.2s;
+            border-radius: 50%;
+        }
+        
+        input:checked + .toggle-slider {
+            background-color: var(--success);
+        }
+        
+        input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+        
+        .cameras-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .camera-card {
+            background: var(--surface-alt);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 1rem;
+        }
+        
+        .camera-name {
+            font-weight: 600;
+            margin-bottom: 1rem;
+            font-size: 1rem;
+        }
+        
+        .camera-toggles {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+        
+        .config-section {
+            background: var(--surface);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            margin-top: 2rem;
+            box-shadow: 0 1px 3px var(--shadow);
+        }
+        
+        .config-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+        }
+        
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        
+        .form-label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+        
+        .form-input {
+            padding: 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            background: var(--surface);
+            color: var(--text);
+            font-size: 0.875rem;
+        }
+        
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-secondary);
+        }
+        
+        .error {
+            background: var(--error);
+            color: white;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        .success {
+            background: var(--success);
+            color: white;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        @media (max-width: 640px) {
+            .sync-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            
+            .sync-toggles {
+                width: 100%;
+                justify-content: space-between;
+            }
+            
+            .cameras-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .config-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+        }
+        
+        /* Setup Wizard Styles */
+        .setup-wizard {
+            max-width: 600px;
+            margin: 2rem auto;
+            background: var(--surface);
+            border-radius: 1rem;
+            padding: 2rem;
+            box-shadow: 0 4px 6px var(--shadow);
+        }
+        
+        .setup-title {
+            font-size: 1.75rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            text-align: center;
+        }
+        
+        .setup-subtitle {
+            color: var(--text-secondary);
+            text-align: center;
+            margin-bottom: 2rem;
+            line-height: 1.5;
+        }
+        
+        .setup-section {
+            margin-bottom: 2rem;
+        }
+        
+        .setup-section-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--border);
+        }
+        
+        .setup-status {
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-top: 1rem;
+            text-align: center;
+            background: var(--surface-alt);
+            color: var(--text-secondary);
+        }
+        
+        .setup-status.success {
+            background: var(--success);
+            color: white;
+        }
+        
+        .setup-status.error {
+            background: var(--error);
+            color: white;
+        }
+        
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <!-- Setup Wizard (shown when not configured) -->
+    <div id="setupWizard" class="setup-wizard hidden">
+        <div class="setup-title">🎥 Welcome to MyBlink</div>
+        <div class="setup-subtitle">
+            Configure your Blink and VoIP.ms credentials to get started.<br>
+            All settings are stored securely and used only for camera management.
+        </div>
+        
+        <div class="setup-section">
+            <div class="setup-section-title">Blink Account</div>
+            <div class="form-group">
+                <label class="form-label" for="blinkUsername">Email Address</label>
+                <input type="email" id="blinkUsername" class="form-input" placeholder="your@email.com" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="blinkPassword">Password</label>
+                <input type="password" id="blinkPassword" class="form-input" placeholder="Your Blink password" required>
+            </div>
+        </div>
+        
+        <div class="setup-section">
+            <div class="setup-section-title">VoIP.ms Account (for 2FA)</div>
+            <div class="form-group">
+                <label class="form-label" for="voipmsUsername">API Username</label>
+                <input type="text" id="voipmsUsername" class="form-input" placeholder="user@example.com" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="voipmsPassword">API Password</label>
+                <input type="password" id="voipmsPassword" class="form-input" placeholder="Your API password" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="voipmsDid">DID (Phone Number)</label>
+                <input type="text" id="voipmsDid" class="form-input" placeholder="e.g., 5551234567" required>
+            </div>
+        </div>
+        
+        <div class="actions">
+            <button class="btn" id="saveCredsBtn">Save & Start</button>
+        </div>
+        
+        <div id="setupStatus" class="setup-status" style="display: none;"></div>
+    </div>
+    
+    <!-- Main Interface (shown when configured) -->
+    <div id="mainInterface" class="hidden">
+        <div class="header">
+            <div class="header-content">
+                <h1>🎥 MyBlink</h1>
+                <div class="controls">
+                    <button class="btn" id="refreshBtn">Refresh</button>
+                    <button class="btn btn-secondary" id="runJobsBtn">Run Jobs</button>
+                    <div class="theme-toggle" id="themeToggle">
+                        <span id="themeIcon">🌙</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="container">
+            <div id="messageArea"></div>
+            
+            <div id="loadingArea" class="loading">
+                Loading...
+            </div>
+            
+            <div id="contentArea" class="hidden">
+                <!-- Sync modules will be rendered here -->
+            </div>
+            
+            <div class="config-section" id="configSection">
+                <div class="config-title">⚙️ Configuration</div>
+                <div class="config-grid">
+                    <div class="form-group">
+                        <label class="form-label" for="scheduleInterval">Schedule Interval (hours)</label>
+                        <input type="number" id="scheduleInterval" class="form-input" min="1" max="24">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="retryLimit">Blink Retry Limit</label>
+                        <input type="number" id="retryLimit" class="form-input" min="1" max="10">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="smsWait">SMS Wait Time (seconds)</label>
+                        <input type="number" id="smsWait" class="form-input" min="10" max="120">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="themeSelect">Theme</label>
+                        <select id="themeSelect" class="form-input">
+                            <option value="light">Light</option>
+                            <option value="dark">Dark</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="actions">
+                    <button class="btn" id="saveConfigBtn">Save Configuration</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/app.js"></script>
+</body>
+</html>

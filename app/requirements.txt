@@ -6,11 +6,13 @@ attrs==23.2.0
 ./blinkpy
 certifi==2024.7.4
 charset-normalizer==3.3.2
+flask==3.0.0
 frozenlist==1.4.1
 idna==3.7
 multidict==6.0.5
 python-dateutil==2.9.0.post0
 python-slugify==8.0.4
+PyYAML==6.0.1
 requests==2.32.3
 schedule==1.2.2
 six==1.16.0
@@ -20,3 +22,7 @@ urllib3==2.2.2
 validators==0.33.0
 ./python-voipms
 yarl==1.9.4
+
+# Optional dependencies for web interface
+# flask (added above as required)
+# pillow - for generating custom PWA icons
