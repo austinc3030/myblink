@@ -26,9 +26,11 @@ Thumbs.db
 # User configuration files (don't commit credentials!)
 app/config.yaml
 app/credentials.yaml
+app/credentials.json
 config.json
-credentials.yaml
 config.yaml
+credentials.yaml
+credentials.json
 
 # Health status
 /tmp/myblink_health.json

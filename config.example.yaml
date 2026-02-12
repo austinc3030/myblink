@@ -1,0 +1,180 @@
+# MyBlink Configuration Example
+# Copy this to config.yaml and customize for your environment
+
+# ==============================================================================
+# LOGGING
+# ==============================================================================
+
+# Enable debug mode for verbose logging
+debug_mode: false
+
+# ==============================================================================
+# HEALTH MONITORING
+# ==============================================================================
+
+# File path for health status JSON
+health_file: /tmp/myblink_health.json
+
+# How often to check health status (seconds)
+health_check_interval: 30
+
+# Maximum consecutive errors before marking unhealthy
+max_consecutive_errors: 3
+
+# ==============================================================================
+# BLINK CAMERA SETTINGS
+# ==============================================================================
+
+# Number of retries for Blink API calls
+blink_retry_limit: 3
+
+# ------------------------------------------------------------------------------
+# Camera/Sync Operations - AUTO-MANAGED BY WEB UI
+# ------------------------------------------------------------------------------
+# These lists are automatically updated when you change settings in the web UI.
+# They persist your desired camera states across application restarts.
+# On startup, the application applies these settings to all configured cameras.
+#
+# DO NOT manually edit these unless you know what you're doing!
+# Use the web interface at http://localhost:8080 to manage camera settings.
+#
+# How it works:
+# 1. You toggle settings in web UI (e.g., enable snooze on "Front Door" camera)
+# 2. Web UI updates these lists and saves back to config.yaml
+# 3. On restart, these settings are automatically re-applied to your cameras
+# ------------------------------------------------------------------------------
+
+# Snooze configuration (which cameras/syncs should be snoozed)
+snooze_syncs: []       # Sync modules to keep snoozed
+no_snooze_syncs: []    # Sync modules to keep un-snoozed
+snooze_cams: []        # Individual cameras to keep snoozed
+no_snooze_cams: []     # Individual cameras to keep un-snoozed
+
+# Arm configuration (which cameras/syncs should be armed)
+arm_syncs: []          # Sync modules to keep armed
+no_arm_syncs: []       # Sync modules to keep disarmed
+arm_cams: []           # Individual cameras to keep armed
+no_arm_cams: []        # Individual cameras to keep disarmed
+
+# Thumbnail configuration (which cameras should auto-update thumbnails)
+thumbnail_cams: []     # Cameras to update thumbnails for
+no_thumbnail_cams: []  # Cameras to skip thumbnail updates
+
+# ==============================================================================
+# VOIP.MS SETTINGS (for 2FA SMS)
+# ==============================================================================
+
+# Keyword to identify Blink 2FA messages
+voipms_message_keyword: Blink
+
+# VoIP.ms API retry settings
+voipms_retry_limit: 10
+voipms_retry_delay: 3
+
+# How long to wait for 2FA SMS (seconds)
+voipms_sms_wait: 30
+
+# ==============================================================================
+# SCHEDULE SETTINGS
+# ==============================================================================
+
+# How often to run scheduled jobs (hours)
+schedule_interval_hours: 1
+
+# How often to log status updates (seconds)
+status_log_interval: 60
+
+# Main loop sleep interval (seconds)
+main_loop_sleep: 1
+
+# Sleep time after error before retry (seconds)
+error_recovery_sleep: 5
+
+# ==============================================================================
+# WEB INTERFACE
+# ==============================================================================
+
+# Enable web interface
+web_enabled: true
+
+# Port to listen on
+web_port: 8080
+
+# Host to bind to (0.0.0.0 = all interfaces, 127.0.0.1 = localhost only)
+web_host: 0.0.0.0
+
+# UI theme: 'light' or 'dark'
+web_theme: dark
+
+# ==============================================================================
+# AUTHENTICATION
+# ==============================================================================
+# See AUTH_GUIDE.md for detailed configuration instructions
+
+# Enable authentication (false = no login required)
+auth_enabled: false
+
+# Authentication method: "basic" or "oidc"
+auth_method: basic
+
+# Session timeout in minutes (default: 480 = 8 hours)
+auth_session_timeout: 480
+
+# ------------------------------------------------------------------------------
+# Basic Authentication Settings
+# ------------------------------------------------------------------------------
+# Used when auth_method: basic
+
+# Username for basic auth
+auth_basic_username: admin
+
+# Password hash (bcrypt format: $2b$...)
+# Generate with: python3 -c "import bcrypt; print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt()).decode())"
+auth_basic_password_hash: ""
+
+# ------------------------------------------------------------------------------
+# OIDC Authentication Settings
+# ------------------------------------------------------------------------------
+# Used when auth_method: oidc
+
+# OIDC Client ID from your provider
+auth_oidc_client_id: ""
+
+# OIDC Client Secret from your provider
+auth_oidc_client_secret: ""
+
+# OIDC server metadata URL (discovery endpoint)
+# Examples:
+#   Google: https://accounts.google.com/.well-known/openid-configuration
+#   Keycloak: https://keycloak.example.com/realms/myrealm/.well-known/openid-configuration
+#   Azure AD: https://login.microsoftonline.com/{tenant-id}/v2.0/.well-known/openid-configuration
+auth_oidc_server_metadata_url: ""
+
+# Optional: Redirect URI (auto-generated if empty)
+auth_oidc_redirect_uri: ""
+
+# Optional: Restrict access to specific emails (empty = allow all authenticated users)
+auth_oidc_allowed_emails: []
+#  - user1@example.com
+#  - user2@example.com
+
+# Optional: Restrict access to specific domains (empty = allow all authenticated users)
+auth_oidc_allowed_domains: []
+#  - example.com
+#  - trusted-company.com
+
+# ==============================================================================
+# CREDENTIALS (can also be in separate credentials.yaml)
+# ==============================================================================
+# Note: It's recommended to use credentials.yaml for sensitive data
+# These settings allow storing credentials in config for simplicity
+
+# Blink credentials
+blink_username: ""
+blink_password: ""
+blink_cached_credentials: null
+
+# VoIP.ms credentials
+voipms_username: ""
+voipms_password: ""
+voipms_did: ""

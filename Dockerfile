@@ -29,8 +29,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Environment variables (can be overridden at runtime)
 ENV WEB_PORT=8080 \
     WEB_HOST=0.0.0.0 \
-    MYBLINK_CONFIG=/data/config.yaml \
-    MYBLINK_CREDS=/data/credentials.json
+    MYBLINK_CONFIG=/data/config.yaml
 
 # Expose web interface port
 EXPOSE 8080

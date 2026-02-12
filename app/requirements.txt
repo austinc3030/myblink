@@ -23,6 +23,11 @@ validators==0.33.0
 ./python-voipms
 yarl==1.9.4
 
+# Authentication dependencies
+flask-login==0.6.3
+bcrypt==4.1.2
+authlib==1.3.0
+
 # Optional dependencies for web interface
 # flask (added above as required)
 # pillow - for generating custom PWA icons

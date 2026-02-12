@@ -20,16 +20,27 @@ services:
       # Web server configuration
       - WEB_PORT=8080
       - WEB_HOST=0.0.0.0
-      # Config file paths (stored in persistent volume)
+      # Config file path (stored in persistent volume)
       - MYBLINK_CONFIG=/data/config.yaml
-      - MYBLINK_CREDS=/data/credentials.json
       # Timezone
       - TZ=America/New_York  # Set your timezone
+      
+      # OPTIONAL: Provide credentials via environment variables
+      # If set, these take priority over config file and are saved to config
+      # Uncomment and set these to skip web UI setup:
+      # - BLINK_USERNAME=your-email@example.com
+      # - BLINK_PASSWORD=your-blink-password
+      # - VOIPMS_USERNAME=your-voipms-email@example.com
+      # - VOIPMS_PASSWORD=your-voipms-api-password
+      # - VOIPMS_DID=5551234567
 
 volumes:
   myblink-data:
     driver: local
 
-# Note: On first startup, access http://localhost:8080 to configure credentials
-# All setup is done through the web interface - no manual file editing needed!
-# Config and credentials are stored in Docker volume 'myblink-data' for persistence
+# Credential Configuration Options (checked in this order):
+# 1. Environment variables (BLINK_USERNAME, BLINK_PASSWORD, etc.) - saved to config if found
+# 2. Config file: /data/config.yaml (includes credentials)
+# 3. Web UI setup wizard at http://localhost:8080 (if unconfigured)
+#
+# All settings and credentials are stored in Docker volume 'myblink-data' for persistence
