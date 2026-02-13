@@ -179,8 +179,7 @@ class MyBlink:
             self._web_server = WebServer(
                 myblink_app=self,
                 host=self._web_host,
-                port=self._web_port,
-                logger=self.logger
+                port=self._web_port
             )
             self.logger.info(
                 f"Web server initialized on {self._web_host}:{self._web_port}"
@@ -378,12 +377,9 @@ class MyBlink:
         This is the main entry point that sets up the event loop and runs
         the application until interrupted.
         """
-        # Create and set event loop if needed
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # Create new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         
         self._event_loop = loop
         
