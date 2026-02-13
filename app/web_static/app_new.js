@@ -63,6 +63,19 @@ class MyBlinkApp {
             if (!stateResponse.ok) throw new Error('Failed to load state');
             const newState = await stateResponse.json();
             
+            // Check if not configured
+            if (newState.configured === false) {
+                // App not configured yet, show message and redirect
+                this.showMessage('System not configured. Redirecting to configuration...', 'info');
+                setTimeout(() => window.location.href = '/configure', 1500);
+                return;
+            }
+            
+            // Ensure syncs array exists
+            if (!newState.syncs) {
+                newState.syncs = [];
+            }
+            
             // Check if syncs changed (need to re-render tabs)
             const syncsChanged = !this.state.syncs || 
                                  newState.syncs.length !== this.state.syncs.length ||
@@ -203,63 +216,39 @@ class MyBlinkApp {
             <div class="tab-content active">
                 <div class="sync-card">
                     <div class="sync-header">
-                        <div class="sync-name">${sync.name}</div>
-                        <div class="sync-toggles">
-                            <div class="toggle-group">
-                                <span class="toggle-label">Snooze</span>
-                                <label class="toggle">
-                                    <input type="checkbox" ${sync.snooze ? 'checked' : ''} 
-                                           onchange="app.toggleSyncSnooze('${sync.name}', this.checked)">
-                                    <span class="toggle-slider"></span>
-                                </label>
-                            </div>
-                            <div class="toggle-group">
-                                <span class="toggle-label">Arm</span>
-                                <label class="toggle">
-                                    <input type="checkbox" ${sync.arm ? 'checked' : ''} 
-                                           onchange="app.toggleSyncArm('${sync.name}', this.checked)">
-                                    <span class="toggle-slider"></span>
-                                </label>
+                        <div class="sync-title">
+                            <div class="sync-name">${sync.name}</div>
+                            <div class="camera-buttons">
+                                <button class="btn btn-icon btn-secondary" onclick="app.showSyncInfo('${this.escapeHtml(sync.name)}')" title="Info">
+                                    ℹ️
+                                </button>
+                                <button class="btn btn-icon" onclick="app.showSyncSettings('${this.escapeHtml(sync.name)}')" title="Settings">
+                                    ⚙️
+                                </button>
                             </div>
                         </div>
                     </div>
                     
                     <div class="cameras-grid">
-                        ${sync.cameras.map(camera => this.renderCamera(camera)).join('')}
+                        ${sync.cameras.map(camera => this.renderCamera(camera, sync.name)).join('')}
                     </div>
                 </div>
             </div>
         `;
     }
     
-    renderCamera(camera) {
+    renderCamera(camera, syncName) {
         return `
             <div class="camera-card">
-                <div class="camera-name">📷 ${camera.name}</div>
-                <div class="camera-toggles">
-                    <div class="toggle-group">
-                        <span class="toggle-label">Snooze</span>
-                        <label class="toggle">
-                            <input type="checkbox" ${camera.snooze ? 'checked' : ''} 
-                                   onchange="app.toggleCameraSnooze('${camera.name}', this.checked)">
-                            <span class="toggle-slider"></span>
-                        </label>
-                    </div>
-                    <div class="toggle-group">
-                        <span class="toggle-label">Arm</span>
-                        <label class="toggle">
-                            <input type="checkbox" ${camera.arm ? 'checked' : ''} 
-                                   onchange="app.toggleCameraArm('${camera.name}', this.checked)">
-                            <span class="toggle-slider"></span>
-                        </label>
-                    </div>
-                    <div class="toggle-group">
-                        <span class="toggle-label">Thumbnail</span>
-                        <label class="toggle">
-                            <input type="checkbox" ${camera.thumbnail ? 'checked' : ''} 
-                                   onchange="app.toggleCameraThumbnail('${camera.name}', this.checked)">
-                            <span class="toggle-slider"></span>
-                        </label>
+                <div class="camera-header">
+                    <div class="camera-name">📷 ${camera.name}</div>
+                    <div class="camera-buttons">
+                        <button class="btn btn-icon btn-secondary" onclick="app.showCameraInfo('${this.escapeHtml(camera.name)}')" title="Info">
+                            ℹ️
+                        </button>
+                        <button class="btn btn-icon" onclick="app.showCameraSettings('${this.escapeHtml(camera.name)}', '${this.escapeHtml(syncName)}')" title="Settings">
+                            ⚙️
+                        </button>
                     </div>
                 </div>
             </div>
@@ -267,8 +256,20 @@ class MyBlinkApp {
     }
     
     renderSettings() {
+        // Show notification if no cameras detected
+        const noCamerasNotice = (!this.state.syncs || this.state.syncs.length === 0) ? `
+            <div class="settings-section" style="background: rgba(37, 99, 235, 0.1); border-left: 4px solid var(--primary);">
+                <div class="settings-title">📷 Cameras</div>
+                <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                    No cameras detected yet. If you just configured your credentials, it may take a moment to connect to Blink.
+                </p>
+                <button class="btn btn-secondary" onclick="app.refresh()">🔄 Refresh Now</button>
+            </div>
+        ` : '';
+        
         return `
             <div class="tab-content active">
+                ${noCamerasNotice}
                 <div class="settings-section">
                     <div class="settings-title">⚙️ Application Settings</div>
                     <div class="settings-grid">
@@ -532,14 +533,326 @@ class MyBlinkApp {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             });
-            if (!response.ok) throw new Error('API call failed');
+            
+            if (!response.ok) {
+                // Try to get error message from response
+                let errorMsg = 'API call failed';
+                try {
+                    const errorData = await response.json();
+                    if (errorData.error) {
+                        errorMsg = errorData.error;
+                    }
+                } catch (e) {
+                    errorMsg = `API call failed with status ${response.status}`;
+                }
+                throw new Error(errorMsg);
+            }
+            
             this.showMessage('Updated successfully', 'success');
+            
+            // Reload state to show updated values
+            await this.loadData();
         } catch (error) {
             this.showMessage('Update failed: ' + error.message, 'error');
+            console.error('API call error:', error);
+            // Reload anyway to revert UI to actual state
+            await this.loadData();
         }
     }
     
+    // Modal methods
+    showModal(title, content, footer = '') {
+        const modal = `
+            <div class="modal-overlay" onclick="app.closeModal(event)">
+                <div class="modal" onclick="event.stopPropagation()">
+                    <div class="modal-header">
+                        <div class="modal-title">${title}</div>
+                        <button class="modal-close" onclick="app.closeModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        ${content}
+                    </div>
+                    ${footer ? `<div class="modal-footer">${footer}</div>` : ''}
+                </div>
+            </div>
+        `;
+        document.getElementById('modalContainer').innerHTML = modal;
+    }
+    
+    closeModal(event) {
+        if (!event || event.target.classList.contains('modal-overlay')) {
+            document.getElementById('modalContainer').innerHTML = '';
+        }
+    }
+    
+    async showCameraInfo(cameraName) {
+        try {
+            const response = await fetch(`/api/camera/${encodeURIComponent(cameraName)}/info`);
+            if (!response.ok) throw new Error('Failed to load camera info');
+            const info = await response.json();
+            
+            // Get current state
+            const camera = this.findCamera(cameraName);
+            
+            const content = `
+                <div class="info-grid">
+                    <div class="info-row">
+                        <div class="info-label">Status</div>
+                        <div class="info-value">${info.status || 'N/A'}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Armed</div>
+                        <div class="info-value">${camera?.arm ? '✓ Yes' : '✗ No'}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Snoozed</div>
+                        <div class="info-value">${camera?.snooze ? '✓ Yes' : '✗ No'}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Motion</div>
+                        <div class="info-value">${info.enabled === true ? '✓ Enabled' : '✗ Disabled'}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Battery</div>
+                        <div class="info-value">${info.battery || 'N/A'}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">WiFi</div>
+                        <div class="info-value">${info.wifi_strength || 'N/A'}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Temp</div>
+                        <div class="info-value">${info.temperature || 'N/A'}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Type</div>
+                        <div class="info-value">${info.product_type || info.type || 'N/A'}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Camera ID</div>
+                        <div class="info-value">${info.camera_id || 'N/A'}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Serial</div>
+                        <div class="info-value">${info.serial || 'N/A'}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Firmware</div>
+                        <div class="info-value">${info.fw_version || 'N/A'}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Network ID</div>
+                        <div class="info-value">${info.network_id || 'N/A'}</div>
+                    </div>
+                </div>
+            `;
+            
+            this.showModal(`📷 ${cameraName}`, content);
+        } catch (error) {
+            this.showMessage('Failed to load camera info: ' + error.message, 'error');
+        }
+    }
+    
+    async showCameraSettings(cameraName, syncName) {
+        const camera = this.findCamera(cameraName);
+        if (!camera) {
+            this.showMessage('Camera not found', 'error');
+            return;
+        }
+        
+        const content = `
+            <div>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <div class="setting-label">🔕 Snooze Motion</div>
+                        <div class="setting-description">Disable detection for 5 minutes</div>
+                    </div>
+                    <label class="toggle">
+                        <input type="checkbox" id="cameraSnooze" ${camera.snooze ? 'checked' : ''}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <div class="setting-label">🎯 Arm Camera</div>
+                        <div class="setting-description">Enable motion detection</div>
+                    </div>
+                    <label class="toggle">
+                        <input type="checkbox" id="cameraArm" ${camera.arm ? 'checked' : ''}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <div class="setting-label">📸 Thumbnails</div>
+                        <div class="setting-description">Capture periodic snapshots</div>
+                    </div>
+                    <label class="toggle">
+                        <input type="checkbox" id="cameraThumbnail" ${camera.thumbnail ? 'checked' : ''}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+        `;
+        
+        const footer = `
+            <button class="btn btn-secondary" onclick="app.closeModal()">Cancel</button>
+            <button class="btn" onclick="app.saveCameraSettings('${this.escapeHtml(cameraName)}')">Save Settings</button>
+        `;
+        
+        this.showModal(`⚙️ ${cameraName} Settings`, content, footer);
+    }
+    
+    async saveCameraSettings(cameraName) {
+        const snooze = document.getElementById('cameraSnooze').checked;
+        const arm = document.getElementById('cameraArm').checked;
+        const thumbnail = document.getElementById('cameraThumbnail').checked;
+        
+        this.closeModal();
+        this.showMessage('Saving camera settings...', 'info');
+        
+        try {
+            // Apply all settings without showing individual messages
+            await fetch(`/api/camera/${encodeURIComponent(cameraName)}/snooze`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: snooze })
+            });
+            
+            await fetch(`/api/camera/${encodeURIComponent(cameraName)}/arm`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: arm })
+            });
+            
+            await fetch(`/api/camera/${encodeURIComponent(cameraName)}/thumbnail`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: thumbnail })
+            });
+            
+            await this.loadData();
+            this.showMessage('Camera settings saved successfully', 'success');
+        } catch (error) {
+            this.showMessage('Failed to save camera settings: ' + error.message, 'error');
+        }
+    }
+    
+    async showSyncInfo(syncName) {
+        const sync = this.state.syncs.find(s => s.name === syncName);
+        if (!sync) {
+            this.showMessage('Sync module not found', 'error');
+            return;
+        }
+        
+        const content = `
+            <div class="info-grid">
+                <div class="info-row">
+                    <div class="info-label">Armed</div>
+                    <div class="info-value">${sync.arm ? '✓ Yes' : '✗ No'}</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">Snoozed</div>
+                    <div class="info-value">${sync.snooze ? '✓ Yes' : '✗ No'}</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">Cameras</div>
+                    <div class="info-value">${sync.cameras.length}</div>
+                </div>
+                <div class="info-row" style="grid-column: 1 / -1;">
+                    <div class="info-label">Camera List</div>
+                    <div class="info-value">${sync.cameras.map(c => c.name).join(', ')}</div>
+                </div>
+            </div>
+        `;
+        
+        this.showModal(`🔗 ${syncName}`, content);
+    }
+    
+    async showSyncSettings(syncName) {
+        const sync = this.state.syncs.find(s => s.name === syncName);
+        if (!sync) {
+            this.showMessage('Sync module not found', 'error');
+            return;
+        }
+        
+        const content = `
+            <div>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <div class="setting-label">🔕 Snooze All</div>
+                        <div class="setting-description">Disable all cameras for 4 minutes</div>
+                    </div>
+                    <label class="toggle">
+                        <input type="checkbox" id="syncSnooze" ${sync.snooze ? 'checked' : ''}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <div class="setting-label">🎯 Arm All</div>
+                        <div class="setting-description">Enable all cameras</div>
+                    </div>
+                    <label class="toggle">
+                        <input type="checkbox" id="syncArm" ${sync.arm ? 'checked' : ''}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+        `;
+        
+        const footer = `
+            <button class="btn btn-secondary" onclick="app.closeModal()">Cancel</button>
+            <button class="btn" onclick="app.saveSyncSettings('${this.escapeHtml(syncName)}')">Save Settings</button>
+        `;
+        
+        this.showModal(`⚙️ ${syncName} Settings`, content, footer);
+    }
+    
+    async saveSyncSettings(syncName) {
+        const snooze = document.getElementById('syncSnooze').checked;
+        const arm = document.getElementById('syncArm').checked;
+        
+        this.closeModal();
+        this.showMessage('Saving sync module settings...', 'info');
+        
+        try {
+            // Apply settings without showing individual messages
+            await fetch(`/api/sync/${encodeURIComponent(syncName)}/snooze`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: snooze })
+            });
+            
+            await fetch(`/api/sync/${encodeURIComponent(syncName)}/arm`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: arm })
+            });
+            
+            await this.loadData();
+            this.showMessage('Sync module settings saved successfully', 'success');
+        } catch (error) {
+            this.showMessage('Failed to save sync settings: ' + error.message, 'error');
+        }
+    }
+    
+    findCamera(cameraName) {
+        for (const sync of this.state.syncs) {
+            const camera = sync.cameras.find(c => c.name === cameraName);
+            if (camera) return camera;
+        }
+        return null;
+    }
+
+    
     async refresh() {
+        // Check if configured first
+        if (this.state.configured === false) {
+            this.showMessage('System not configured yet', 'error');
+            return;
+        }
+        
         this.showMessage('Refreshing camera state...', 'info');
         try {
             const response = await fetch('/api/refresh', { method: 'POST' });

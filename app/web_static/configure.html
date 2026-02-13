@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#6b7280">
+    <title>MyBlink - Configuration</title>
+    <style>
+        :root {
+            --primary: #6b7280;
+            --primary-dark: #4b5563;
+            --surface: #ffffff;
+            --surface-alt: #f3f4f6;
+            --border: #e5e7eb;
+            --text: #111827;
+            --text-secondary: #6b7280;
+            --success: #10b981;
+            --error: #ef4444;
+            --shadow: rgba(0, 0, 0, 0.1);
+        }
+        
+        [data-theme="dark"] {
+            --primary: #6b7280;
+            --primary-dark: #4b5563;
+            --surface: #1f2937;
+            --surface-alt: #111827;
+            --border: #374151;
+            --text: #f9fafb;
+            --text-secondary: #9ca3af;
+            --success: #34d399;
+            --error: #f87171;
+            --shadow: rgba(0, 0, 0, 0.3);
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: var(--surface-alt);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .config-container {
+            background: var(--surface);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            box-shadow: 0 4px 6px var(--shadow);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .logo svg {
+            width: 60px;
+            height: 60px;
+            fill: var(--primary);
+        }
+        
+        h1 {
+            text-align: center;
+            color: var(--text);
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+            padding-bottom: 30px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .section:last-of-type {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+        
+        .section-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .section-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--surface-alt);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            font-size: 20px;
+        }
+        
+        .section-title {
+            flex: 1;
+        }
+        
+        .section-title h2 {
+            color: var(--text);
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+        
+        .section-title p {
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        label {
+            display: block;
+            color: var(--text);
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        
+        .label-hint {
+            font-weight: 400;
+            color: var(--text-secondary);
+            margin-left: 4px;
+        }
+        
+        input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.2s;
+            font-family: inherit;
+            background: var(--surface);
+            color: var(--text);
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+        
+        input::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.5;
+        }
+        
+        .input-hint {
+            margin-top: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        
+        .error-message {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--error);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+            animation: shake 0.3s;
+        }
+        
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        
+        .error-message.show {
+            display: block;
+        }
+        
+        .success-message {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+        
+        .success-message.show {
+            display: block;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 14px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 10px;
+        }
+        
+        .btn:hover:not(:disabled) {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+        
+        .btn:active:not(:disabled) {
+            transform: translateY(0);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .btn-secondary {
+            background: var(--surface-alt);
+            color: var(--text);
+            margin-top: 10px;
+        }
+        
+        .btn-secondary:hover:not(:disabled) {
+            background: var(--border);
+        }
+        
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top: 2px solid white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .info-note {
+            margin-top: 20px;
+            padding: 15px;
+            background: var(--surface-alt);
+            border-left: 4px solid var(--primary);
+            border-radius: 4px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        
+        .info-note strong {
+            display: block;
+            margin-bottom: 6px;
+        }
+        
+        @media (max-width: 640px) {
+            .config-container {
+                padding: 30px 20px;
+            }
+            
+            h1 {
+                font-size: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="config-container">
+        <div class="logo">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+            </svg>
+        </div>
+        
+        <h1>System Configuration</h1>
+        <p class="subtitle">Connect your Blink cameras and VoIP.ms account</p>
+        
+        <div id="errorMessage" class="error-message"></div>
+        <div id="successMessage" class="success-message"></div>
+        
+        <form id="configForm">
+            <!-- Blink Section -->
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-icon">📷</div>
+                    <div class="section-title">
+                        <h2>Blink Camera Credentials</h2>
+                        <p>Your Blink account login information</p>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="blinkUsername">
+                        Email Address
+                    </label>
+                    <input 
+                        type="email" 
+                        id="blinkUsername" 
+                        name="blinkUsername" 
+                        placeholder="your@email.com"
+                        autocomplete="email"
+                        required
+                    />
+                    <div class="input-hint">The email you use to log in to the Blink app</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="blinkPassword">
+                        Password
+                    </label>
+                    <input 
+                        type="password" 
+                        id="blinkPassword" 
+                        name="blinkPassword" 
+                        placeholder="••••••••"
+                        autocomplete="current-password"
+                        required
+                    />
+                    <div class="input-hint">Your Blink account password</div>
+                </div>
+            </div>
+            
+            <!-- VoIP.ms Section -->
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-icon">📞</div>
+                    <div class="section-title">
+                        <h2>VoIP.ms API Credentials</h2>
+                        <p>For SMS notifications</p>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="voipmsUsername">
+                        VoIP.ms Username
+                        <span class="label-hint">(Email)</span>
+                    </label>
+                    <input 
+                        type="email" 
+                        id="voipmsUsername" 
+                        name="voipmsUsername" 
+                        placeholder="user@example.com"
+                        autocomplete="email"
+                        required
+                    />
+                    <div class="input-hint">Your VoIP.ms account email</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="voipmsPassword">
+                        API Password
+                    </label>
+                    <input 
+                        type="password" 
+                        id="voipmsPassword" 
+                        name="voipmsPassword" 
+                        placeholder="••••••••"
+                        required
+                    />
+                    <div class="input-hint">API password from VoIP.ms portal (not your login password)</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="voipmsDid">
+                        DID (Phone Number)
+                    </label>
+                    <input 
+                        type="tel" 
+                        id="voipmsDid" 
+                        name="voipmsDid" 
+                        placeholder="5551234567"
+                        pattern="[0-9]+"
+                        required
+                    />
+                    <div class="input-hint">Your VoIP.ms phone number (digits only, no spaces or dashes)</div>
+                </div>
+            </div>
+            
+            <button type="submit" class="btn" id="submitBtn">
+                Save Configuration
+            </button>
+            
+            <button type="button" class="btn btn-secondary" id="testBtn">
+                Test Connection
+            </button>
+        </form>
+        
+        <div class="info-note">
+            <strong>🔒 Security Note</strong>
+            Your credentials are stored securely in the configuration file and never transmitted except to authenticate with Blink and VoIP.ms services. You can update these settings at any time from the web interface.
+        </div>
+    </div>
+
+    <script>
+        // Apply theme based on system preference
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (prefersDark) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        }
+        
+        const form = document.getElementById('configForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const testBtn = document.getElementById('testBtn');
+        const errorMessage = document.getElementById('errorMessage');
+        const successMessage = document.getElementById('successMessage');
+        
+        // Form inputs
+        const blinkUsername = document.getElementById('blinkUsername');
+        const blinkPassword = document.getElementById('blinkPassword');
+        const voipmsUsername = document.getElementById('voipmsUsername');
+        const voipmsPassword = document.getElementById('voipmsPassword');
+        const voipmsDid = document.getElementById('voipmsDid');
+        
+        // Clear messages on input
+        [blinkUsername, blinkPassword, voipmsUsername, voipmsPassword, voipmsDid].forEach(input => {
+            input.addEventListener('input', function() {
+                errorMessage.classList.remove('show');
+                successMessage.classList.remove('show');
+            });
+        });
+        
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.add('show');
+            successMessage.classList.remove('show');
+        }
+        
+        function showSuccess(message) {
+            successMessage.textContent = message;
+            successMessage.classList.add('show');
+            errorMessage.classList.remove('show');
+        }
+        
+        function showLoading(button, text) {
+            button.disabled = true;
+            button.innerHTML = `<span class="spinner"></span>${text}`;
+        }
+        
+        function hideLoading(button, text) {
+            button.disabled = false;
+            button.textContent = text;
+        }
+        
+        function getFormData() {
+            return {
+                blink_username: blinkUsername.value.trim(),
+                blink_password: blinkPassword.value,
+                voipms_username: voipmsUsername.value.trim(),
+                voipms_password: voipmsPassword.value,
+                voipms_did: voipmsDid.value.trim().replace(/[^0-9]/g, '')
+            };
+        }
+        
+        function validateForm() {
+            const data = getFormData();
+            
+            if (!data.blink_username || !data.blink_username.includes('@')) {
+                showError('Please enter a valid Blink email address');
+                blinkUsername.focus();
+                return false;
+            }
+            
+            if (!data.blink_password || data.blink_password.length < 3) {
+                showError('Please enter your Blink password');
+                blinkPassword.focus();
+                return false;
+            }
+            
+            if (!data.voipms_username || !data.voipms_username.includes('@')) {
+                showError('Please enter a valid VoIP.ms email address');
+                voipmsUsername.focus();
+                return false;
+            }
+            
+            if (!data.voipms_password || data.voipms_password.length < 3) {
+                showError('Please enter your VoIP.ms API password');
+                voipmsPassword.focus();
+                return false;
+            }
+            
+            if (!data.voipms_did || data.voipms_did.length < 10) {
+                showError('Please enter a valid phone number (at least 10 digits)');
+                voipmsDid.focus();
+                return false;
+            }
+            
+            return true;
+        }
+        
+        // Test connection
+        testBtn.addEventListener('click', async function() {
+            if (!validateForm()) return;
+            
+            showLoading(testBtn, 'Testing connection...');
+            
+            try {
+                const response = await fetch('/api/config/test', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(getFormData())
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showSuccess(`✅ Connection successful! ${data.message || ''}`);
+                } else {
+                    showError(data.error || 'Connection test failed');
+                }
+            } catch (error) {
+                console.error('Test error:', error);
+                showError('Network error. Please ensure the server is running.');
+            } finally {
+                hideLoading(testBtn, 'Test Connection');
+            }
+        });
+        
+        // Submit form
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            if (!validateForm()) return;
+            
+            showLoading(submitBtn, 'Saving and connecting to Blink...');
+            
+            try {
+                const response = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(getFormData())
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showSuccess('✅ Configuration saved and Blink initialized! Redirecting...');
+                    
+                    // Redirect after a short delay
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 2000);
+                } else {
+                    showError(data.error || 'Failed to save configuration');
+                    hideLoading(submitBtn, 'Save Configuration');
+                }
+            } catch (error) {
+                console.error('Save error:', error);
+                showError('Network error. Please ensure the server is running.');
+                hideLoading(submitBtn, 'Save Configuration');
+            }
+        });
+        
+        // Load existing configuration if any
+        async function loadExistingConfig() {
+            try {
+                const response = await fetch('/api/config/current');
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.blink_username) blinkUsername.value = data.blink_username;
+                    if (data.voipms_username) voipmsUsername.value = data.voipms_username;
+                    if (data.voipms_did) voipmsDid.value = data.voipms_did;
+                }
+            } catch (error) {
+                console.log('No existing configuration found');
+            }
+        }
+        
+        loadExistingConfig();
+    </script>
+</body>
+</html>

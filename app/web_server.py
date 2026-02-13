@@ -12,12 +12,14 @@ import yaml
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, jsonify, request, send_from_directory, Response
+from flask import Flask, jsonify, request, send_from_directory, Response, redirect, session
+from flask_login import login_user
 from werkzeug.serving import make_server
 import threading
 
 # Import authentication modules
 from modules import AuthConfig, AuthManager
+from modules.auth import User
 
 # Type checking
 try:
@@ -86,6 +88,24 @@ class WebServer:
             self.logger.error(f"Failed to initialize authentication: {e}")
             self.auth_manager = None
     
+    def _is_first_run(self) -> bool:
+        """Check if this is the first run (no admin credentials configured)."""
+        config = self.myblink_app.config
+        # First run if auth is not enabled OR no password hash set
+        return not config.auth_enabled or not config.auth_basic_password_hash
+    
+    def _is_app_configured(self) -> bool:
+        """Check if application credentials are configured."""
+        config = self.myblink_app.config
+        # App is configured if we have Blink and VoIP.ms credentials
+        return bool(
+            config.blink_username and 
+            config.blink_password and 
+            config.voipms_username and 
+            config.voipms_password and 
+            config.voipms_did
+        )
+    
     def _setup_log_handler(self) -> None:
         """Setup log handler to capture logs for web interface."""
         class LogCapture(logging.Handler):
@@ -126,17 +146,94 @@ class WebServer:
     def _setup_routes(self) -> None:
         """Setup Flask routes."""
         
-        # Frontend routes - no auth required for static assets
-        # Main page requires auth if enabled
+        # First-run setup route - no auth required
+        @self.app.route('/setup')
+        def setup():
+            """Serve first-run setup page."""
+            if not self._is_first_run():
+                # Already configured, redirect to main page
+                return redirect('/')
+            return send_from_directory('web_static', 'setup.html')
+        
+        # API endpoint to save initial admin credentials
+        @self.app.route('/api/setup/admin', methods=['POST'])
+        def setup_admin():
+            """Save initial admin credentials (first-run only)."""
+            if not self._is_first_run():
+                return jsonify({'error': 'Setup already completed'}), 403
+            
+            try:
+                data = request.get_json()
+                username = data.get('username', '').strip()
+                password = data.get('password', '')
+                
+                if not username or len(username) < 3:
+                    return jsonify({'error': 'Username must be at least 3 characters'}), 400
+                
+                if not password or len(password) < 8:
+                    return jsonify({'error': 'Password must be at least 8 characters'}), 400
+                
+                # Hash the password
+                try:
+                    import bcrypt
+                    password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                except ImportError:
+                    return jsonify({'error': 'bcrypt not installed'}), 500
+                
+                # Update config
+                config = self.myblink_app.config
+                config.auth_enabled = True
+                config.auth_method = "basic"
+                config.auth_basic_username = username
+                config.auth_basic_password_hash = password_hash
+                
+                # Save to config file
+                self.myblink_app.config_manager.save_config()
+                
+                # Re-initialize authentication
+                self._init_authentication()
+                
+                # Auto-login the user after setup
+                user = User(user_id=username, username=username)
+                login_user(user, remember=True)
+                session.permanent = True
+                session['user_data'] = {
+                    'id': username,
+                    'username': username
+                }
+                
+                self.logger.info(f"Admin credentials configured for user: {username}")
+                
+                return jsonify({
+                    'success': True,
+                    'message': 'Admin credentials saved and logged in successfully.'
+                })
+                
+            except Exception as e:
+                self.logger.error(f"Failed to save admin credentials: {e}")
+                return jsonify({'error': str(e)}), 500
+        
+        # Frontend routes
         @self.app.route('/')
         @self._require_auth
         def index():
             """Serve main page."""
+            # Check if first run - redirect to setup
+            if self._is_first_run():
+                return redirect('/setup')
+            # Check if app is configured - redirect to configure
+            if not self._is_app_configured():
+                return redirect('/configure')
             return send_from_directory('web_static', 'index_new.html')
         
         @self.app.route('/static/app.js')
         def app_js():
             """Serve app JavaScript."""
+            return send_from_directory('web_static', 'app_new.js')
+        
+        @self.app.route('/static/app_new.js')
+        def app_new_js():
+            """Serve app JavaScript (new version)."""
             return send_from_directory('web_static', 'app_new.js')
         
         @self.app.route('/manifest.json')
@@ -148,6 +245,122 @@ class WebServer:
         def service_worker():
             """Serve service worker."""
             return send_from_directory('web_static', 'sw.js')
+        
+        # Configuration setup route
+        @self.app.route('/configure')
+        @self._require_auth
+        def configure():
+            """Serve configuration page."""
+            # Redirect to setup if admin not configured
+            if self._is_first_run():
+                return redirect('/setup')
+            # If already configured, redirect to main page
+            if self._is_app_configured():
+                return redirect('/')
+            return send_from_directory('web_static', 'configure.html')
+        
+        # Configuration API routes
+        @self.app.route('/api/config/current')
+        @self._require_auth
+        def get_current_config():
+            """Get current configuration without passwords."""
+            try:
+                config = self.myblink_app.config
+                return jsonify({
+                    'blink_username': config.blink_username,
+                    'voipms_username': config.voipms_username,
+                    'voipms_did': config.voipms_did
+                })
+            except Exception as e:
+                self.logger.error(f"Error getting current config: {e}")
+                return jsonify({'error': str(e)}), 500
+        
+        @self.app.route('/api/config/save', methods=['POST'])
+        @self._require_auth
+        def save_config():
+            """Save Blink and VoIP.ms credentials."""
+            try:
+                data = request.get_json()
+                
+                # Validate required fields
+                required = ['blink_username', 'blink_password', 'voipms_username', 'voipms_password', 'voipms_did']
+                for field in required:
+                    if not data.get(field):
+                        return jsonify({'error': f'Missing required field: {field}'}), 400
+                
+                # Transform flat structure to nested structure for set_credentials
+                creds_dict = {
+                    'blink': {
+                        'username': data['blink_username'].strip(),
+                        'password': data['blink_password']
+                    },
+                    'voipms': {
+                        'username': data['voipms_username'].strip(),
+                        'password': data['voipms_password'],
+                        'did': data['voipms_did'].strip()
+                    }
+                }
+                
+                # Set credentials (this will also initialize services)
+                self.myblink_app.set_credentials(creds_dict)
+                
+                # Trigger async initialization of Blink connection
+                if self.myblink_app._event_loop and self.myblink_app.blink_handler:
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.myblink_app.blink_handler.initialize(),
+                            self.myblink_app._event_loop
+                        )
+                        # Wait up to 30 seconds for initialization
+                        future.result(timeout=30)
+                        self.logger.info("Blink initialized successfully")
+                    except Exception as init_error:
+                        self.logger.error(f"Failed to initialize Blink: {init_error}")
+                        return jsonify({
+                            'error': f'Credentials saved but Blink initialization failed: {str(init_error)}'
+                        }), 500
+                
+                self.logger.info(f"Configuration saved for Blink user: {data['blink_username']}")
+                
+                return jsonify({
+                    'success': True,
+                    'message': 'Configuration saved and Blink initialized successfully'
+                })
+                
+            except Exception as e:
+                self.logger.error(f"Failed to save configuration: {e}")
+                return jsonify({'error': str(e)}), 500
+        
+        @self.app.route('/api/config/test', methods=['POST'])
+        @self._require_auth
+        def test_config():
+            """Test Blink and VoIP.ms credentials."""
+            try:
+                data = request.get_json()
+                
+                # For now, just validate the format
+                # Full connection testing could be added later
+                blink_username = data.get('blink_username', '').strip()
+                voipms_username = data.get('voipms_username', '').strip()
+                voipms_did = data.get('voipms_did', '').strip()
+                
+                if not '@' in blink_username:
+                    return jsonify({'error': 'Invalid Blink email address'}), 400
+                
+                if not '@' in voipms_username:
+                    return jsonify({'error': 'Invalid VoIP.ms email address'}), 400
+                
+                if not voipms_did.isdigit() or len(voipms_did) < 10:
+                    return jsonify({'error': 'Invalid phone number (must be at least 10 digits)'}), 400
+                
+                return jsonify({
+                    'success': True,
+                    'message': 'Credentials format is valid'
+                })
+                
+            except Exception as e:
+                self.logger.error(f"Failed to test configuration: {e}")
+                return jsonify({'error': str(e)}), 500
         
         # Setup/Configuration API routes - require auth
         @self.app.route('/api/setup/status')
@@ -201,17 +414,20 @@ class WebServer:
                 if not self.myblink_app.is_configured():
                     return jsonify({"error": "Application not configured"}), 400
                 
+                if not self.myblink_app.blink_handler:
+                    return jsonify({"error": "Blink handler not initialized"}), 500
+                
                 # Initialize Blink in event loop
                 if self.myblink_app._event_loop:
                     future = asyncio.run_coroutine_threadsafe(
-                        self.myblink_app.initialize_blink(),
+                        self.myblink_app.blink_handler.initialize(),
                         self.myblink_app._event_loop
                     )
                     future.result(timeout=60)
                     
                     # Run initial jobs
                     future = asyncio.run_coroutine_threadsafe(
-                        self.myblink_app.run_scheduled_jobs(),
+                        self.myblink_app.blink_handler.run_scheduled_jobs(),
                         self.myblink_app._event_loop
                     )
                     future.result(timeout=300)
@@ -230,14 +446,24 @@ class WebServer:
             try:
                 # Check if configured
                 if not self.myblink_app.is_configured():
-                    return jsonify({"configured": False})
+                    return jsonify({"configured": False, "syncs": [], "cameras": {}})
                 
-                state = self._get_current_state()
+                # Get actual state from Blink (async operation)
+                if self.myblink_app._event_loop and self.myblink_app.blink_handler:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._get_current_state_async(),
+                        self.myblink_app._event_loop
+                    )
+                    state = future.result(timeout=30)
+                else:
+                    state = {"syncs": []}
+                
                 state["configured"] = True
                 return jsonify(state)
             except Exception as e:
-                self.logger.error(f"Error getting state: {e}")
-                return jsonify({"error": str(e)}), 500
+                self.logger.error(f"Error getting state: {e}", exc_info=True)
+                # Return safe default state even on error
+                return jsonify({"configured": False, "syncs": [], "cameras": {}, "error": str(e)})
         
         @self.app.route('/api/config')
         @self._require_auth
@@ -247,8 +473,17 @@ class WebServer:
                 config = self._get_config()
                 return jsonify(config)
             except Exception as e:
-                self.logger.error(f"Error getting config: {e}")
-                return jsonify({"error": str(e)}), 500
+                self.logger.error(f"Error getting config: {e}", exc_info=True)
+                # Return safe default config
+                return jsonify({
+                    "schedule_interval_hours": 1,
+                    "blink_retry_limit": 3,
+                    "voipms_sms_wait": 30,
+                    "theme": "dark",
+                    "blink_username": "",
+                    "voipms_username": "",
+                    "voipms_did": ""
+                })
         
         @self.app.route('/api/config', methods=['POST'])
         @self._require_auth
@@ -269,10 +504,119 @@ class WebServer:
             try:
                 data = request.get_json()
                 enabled = data.get('enabled', False)
+                
+                self.logger.info(f"Toggle camera snooze request: {camera_name}, enabled={enabled}")
+                
+                # Update config first
                 self._update_camera_setting(camera_name, 'snooze', enabled)
+                
+                if enabled:
+                    # Apply snooze via Blink API
+                    camera = self._find_camera(camera_name)
+                    if not camera:
+                        self.logger.error(f"Camera {camera_name} not found")
+                        return jsonify({"error": f"Camera {camera_name} not found"}), 404
+                    
+                    if not self.myblink_app._event_loop:
+                        self.logger.error("Event loop not available")
+                        return jsonify({"error": "Event loop not available"}), 500
+                    
+                    # Get and validate product_type
+                    product_type = getattr(camera, 'product_type', None)
+                    camera_type = getattr(camera, 'camera_type', '')
+                    
+                    # Attempt to determine product_type if None
+                    if not product_type:
+                        # Try to infer from camera_type or other attributes
+                        if 'mini' in camera_type.lower():
+                            product_type = 'owl'
+                        elif 'doorbell' in camera_type.lower():
+                            product_type = 'doorbell'
+                        else:
+                            # Default to 'owl' for most cameras
+                            product_type = 'owl'
+                        self.logger.warning(f"Camera {camera_name} had no product_type, using: {product_type}")
+                    
+                    # Log camera details for debugging
+                    self.logger.info(f"Camera found: {camera_name}, product_type={product_type}, camera_type={camera_type}, camera_id={getattr(camera, 'camera_id', 'unknown')}")
+                    
+                    # Validate product_type is supported
+                    supported_types = ["owl", "catalina", "doorbell", "hawk", "lotus", "sedona"]
+                    if product_type not in supported_types:
+                        error_msg = f"Camera {camera_name} has unsupported product_type: {product_type}"
+                        self.logger.error(error_msg)
+                        return jsonify({"error": error_msg}), 400
+                    
+                    # Use 300 seconds (5 minutes) instead of 3600 (1 hour)
+                    # Some Blink cameras may not support longer durations
+                    snooze_time = 300
+                    future = asyncio.run_coroutine_threadsafe(
+                        camera.async_snooze(snooze_time),
+                        self.myblink_app._event_loop
+                    )
+                    result = future.result(timeout=30)
+                    
+                    self.logger.info(f"Snooze API result: {result}")
+                    
+                    if result:
+                        self.logger.info(f"Camera {camera_name} snoozed for {snooze_time}s")
+                        # Refresh to get updated state (non-blocking, longer timeout)
+                        if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
+                            try:
+                                future = asyncio.run_coroutine_threadsafe(
+                                    self.myblink_app.blink_handler.blink.refresh(force=True),
+                                    self.myblink_app._event_loop
+                                )
+                                # Don't wait for refresh to complete - let it happen async
+                                # future.result(timeout=30)
+                            except Exception as e:
+                                self.logger.warning(f"Refresh after snooze skipped: {e}")
+                    else:
+                        error_msg = f"Camera {camera_name} snooze returned None - product_type may not be supported"
+                        self.logger.warning(error_msg)
+                        return jsonify({"error": error_msg}), 400
+                else:
+                    # De-snooze: disarm and re-arm the sync, then re-snooze other cameras
+                    self.logger.info(f"De-snoozing camera {camera_name}")
+                    
+                    camera = self._find_camera(camera_name)
+                    sync_info = self._find_sync_for_camera(camera_name)
+                    
+                    if not camera or not sync_info:
+                        self.logger.error(f"Camera {camera_name} or its sync not found")
+                        return jsonify({"error": f"Camera {camera_name} or its sync not found"}), 404
+                    
+                    if not self.myblink_app._event_loop:
+                        self.logger.error("Event loop not available")
+                        return jsonify({"error": "Event loop not available"}), 500
+                    
+                    sync, sync_name = sync_info
+                    
+                    # Run de-snooze in event loop
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._desnooze_camera_async(camera_name, camera, sync, sync_name),
+                        self.myblink_app._event_loop
+                    )
+                    success = future.result(timeout=60)
+                    
+                    if not success:
+                        return jsonify({"error": "Failed to de-snooze camera"}), 500
+                    
+                    # Refresh to get updated state
+                    if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
+                        try:
+                            future = asyncio.run_coroutine_threadsafe(
+                                self.myblink_app.blink_handler.blink.refresh(force=True),
+                                self.myblink_app._event_loop
+                            )
+                        except Exception as e:
+                            self.logger.warning(f"Refresh after de-snooze skipped: {e}")
+                    
+                    self.logger.info(f"Camera {camera_name} de-snoozed successfully")
+                
                 return jsonify({"success": True})
             except Exception as e:
-                self.logger.error(f"Error toggling camera snooze: {e}")
+                self.logger.error(f"Error toggling camera snooze: {e}", exc_info=True)
                 return jsonify({"error": str(e)}), 500
         
         @self.app.route('/api/camera/<camera_name>/arm', methods=['POST'])
@@ -282,7 +626,31 @@ class WebServer:
             try:
                 data = request.get_json()
                 enabled = data.get('enabled', False)
+                
+                # Update config first
                 self._update_camera_setting(camera_name, 'arm', enabled)
+                
+                # Apply setting immediately via Blink API
+                camera = self._find_camera(camera_name)
+                if camera and self.myblink_app._event_loop:
+                    future = asyncio.run_coroutine_threadsafe(
+                        camera.async_arm(enabled),
+                        self.myblink_app._event_loop
+                    )
+                    result = future.result(timeout=30)
+                    self.logger.info(f"Camera {camera_name} {'armed' if enabled else 'disarmed'} - result: {result}")
+                    
+                    # Update local camera state immediately
+                    camera.motion_enabled = enabled
+                    
+                    # Refresh to get updated state from Blink
+                    if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.myblink_app.blink_handler.blink.refresh(force=True),
+                            self.myblink_app._event_loop
+                        )
+                        future.result(timeout=10)
+                
                 return jsonify({"success": True})
             except Exception as e:
                 self.logger.error(f"Error toggling camera arm: {e}")
@@ -544,7 +912,67 @@ class WebServer:
             try:
                 data = request.get_json()
                 enabled = data.get('enabled', False)
+                
+                # Update config first
                 self._update_sync_setting(sync_name, 'snooze', enabled)
+                
+                if enabled:
+                    # Apply snooze via Blink API
+                    sync = self._find_sync(sync_name)
+                    if sync and self.myblink_app._event_loop:
+                        snooze_time = 240  # 4 minutes
+                        future = asyncio.run_coroutine_threadsafe(
+                            sync.async_snooze(snooze_time),
+                            self.myblink_app._event_loop
+                        )
+                        result = future.result(timeout=30)
+                        if result:
+                            self.logger.info(f"Sync {sync_name} snoozed for {snooze_time}s")
+                            # Refresh to get updated state
+                            if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
+                                future = asyncio.run_coroutine_threadsafe(
+                                    self.myblink_app.blink_handler.blink.refresh(force=True),
+                                    self.myblink_app._event_loop
+                                )
+                                future.result(timeout=10)
+                        else:
+                            self.logger.warning(f"Sync {sync_name} snooze may have failed")
+                else:
+                    # De-snooze: disarm and re-arm the sync
+                    self.logger.info(f"De-snoozing sync {sync_name}")
+                    
+                    sync = self._find_sync(sync_name)
+                    if not sync:
+                        self.logger.error(f"Sync {sync_name} not found")
+                        return jsonify({"error": f"Sync {sync_name} not found"}), 404
+                    
+                    if not self.myblink_app._event_loop:
+                        self.logger.error("Event loop not available")
+                        return jsonify({"error": "Event loop not available"}), 500
+                    
+                    # Run de-snooze in event loop
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._desnooze_sync_async(sync, sync_name),
+                        self.myblink_app._event_loop
+                    )
+                    success = future.result(timeout=60)
+                    
+                    if not success:
+                        return jsonify({"error": "Failed to de-snooze sync"}), 500
+                    
+                    # Refresh to get updated state
+                    if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
+                        try:
+                            future = asyncio.run_coroutine_threadsafe(
+                                self.myblink_app.blink_handler.blink.refresh(force=True),
+                                self.myblink_app._event_loop
+                            )
+                            future.result(timeout=10)
+                        except Exception as e:
+                            self.logger.warning(f"Refresh after de-snooze skipped: {e}")
+                    
+                    self.logger.info(f"Sync {sync_name} de-snoozed successfully")
+                
                 return jsonify({"success": True})
             except Exception as e:
                 self.logger.error(f"Error toggling sync snooze: {e}")
@@ -557,7 +985,28 @@ class WebServer:
             try:
                 data = request.get_json()
                 enabled = data.get('enabled', False)
+                
+                # Update config first
                 self._update_sync_setting(sync_name, 'arm', enabled)
+                
+                # Apply setting immediately via Blink API
+                sync = self._find_sync(sync_name)
+                if sync and self.myblink_app._event_loop:
+                    future = asyncio.run_coroutine_threadsafe(
+                        sync.async_arm(enabled),
+                        self.myblink_app._event_loop
+                    )
+                    result = future.result(timeout=30)
+                    self.logger.info(f"Sync {sync_name} {'armed' if enabled else 'disarmed'} - result: {result}")
+                    
+                    # Refresh to get updated state from Blink
+                    if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.myblink_app.blink_handler.blink.refresh(force=True),
+                            self.myblink_app._event_loop
+                        )
+                        future.result(timeout=10)
+                
                 return jsonify({"success": True})
             except Exception as e:
                 self.logger.error(f"Error toggling sync arm: {e}")
@@ -568,10 +1017,14 @@ class WebServer:
         def refresh():
             """Refresh camera list from Blink."""
             try:
+                # Check if configured
+                if not self.myblink_app.is_configured():
+                    return jsonify({"error": "Application not configured"}), 400
+                
                 # Run async refresh in event loop
-                if self.myblink_app.blink and self.myblink_app._event_loop:
+                if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink and self.myblink_app._event_loop:
                     future = asyncio.run_coroutine_threadsafe(
-                        self.myblink_app.blink.refresh(force=True),
+                        self.myblink_app.blink_handler.blink.refresh(force=True),
                         self.myblink_app._event_loop
                     )
                     future.result(timeout=30)
@@ -585,9 +1038,12 @@ class WebServer:
         def run_jobs():
             """Manually trigger scheduled jobs."""
             try:
+                if not self.myblink_app.blink_handler:
+                    return jsonify({"error": "Blink handler not initialized"}), 500
+                    
                 if self.myblink_app._event_loop:
                     future = asyncio.run_coroutine_threadsafe(
-                        self.myblink_app.run_scheduled_jobs(),
+                        self.myblink_app.blink_handler.run_scheduled_jobs(),
                         self.myblink_app._event_loop
                     )
                     future.result(timeout=300)
@@ -657,19 +1113,19 @@ class WebServer:
                 return jsonify({"error": str(e)}), 500
     
     def _get_current_state(self) -> Dict[str, Any]:
-        """Get current state of all cameras and syncs."""
-        if not self.myblink_app.blink or not self.myblink_app.config:
+        """Get current state of all cameras and syncs (sync version - config only)."""
+        if not self.myblink_app.blink_handler or not self.myblink_app.blink_handler.blink or not self.myblink_app.config:
             return {"syncs": [], "cameras": {}}
         
         config = self.myblink_app.config
         syncs = []
         
-        for sync_name, sync in self.myblink_app.blink.sync.items():
-            # Get sync-level settings
+        for sync_name, sync in self.myblink_app.blink_handler.blink.sync.items():
+            # Get sync-level settings (frontend expects 'arm', 'snooze')
             sync_data = {
                 "name": sync_name,
-                "snooze_enabled": sync_name in config.snooze_syncs,
-                "arm_enabled": sync_name in config.arm_syncs,
+                "snooze": sync_name in config.snooze_syncs,
+                "arm": sync_name in config.arm_syncs,
                 "cameras": []
             }
             
@@ -678,9 +1134,9 @@ class WebServer:
                 for camera_name, camera in sync.cameras.items():
                     camera_data = {
                         "name": camera_name,
-                        "snooze_enabled": camera_name in config.snooze_cams,
-                        "arm_enabled": camera_name in config.arm_cams,
-                        "thumbnail_enabled": camera_name in config.thumbnail_cams
+                        "snooze": camera_name in config.snooze_cams,
+                        "arm": camera_name in config.arm_cams,
+                        "thumbnail": camera_name in config.thumbnail_cams
                     }
                     sync_data["cameras"].append(camera_data)
             
@@ -688,10 +1144,157 @@ class WebServer:
         
         return {"syncs": syncs}
     
+    async def _get_current_state_async(self) -> Dict[str, Any]:
+        """Get current state of all cameras and syncs from Blink API (async version)."""
+        if not self.myblink_app.blink_handler or not self.myblink_app.blink_handler.blink:
+            return {"syncs": []}
+        
+        syncs = []
+        
+        for sync_name, sync in self.myblink_app.blink_handler.blink.sync.items():
+            # Get actual sync state from Blink
+            sync_armed = sync.arm if hasattr(sync, 'arm') else None
+            
+            # Get snoozed status - avoid hasattr which can trigger async property
+            sync_snoozed = False
+            try:
+                sync_snoozed = await sync.snoozed
+            except AttributeError:
+                pass
+            except Exception as e:
+                self.logger.debug(f"Could not get snooze status for sync {sync_name}: {e}")
+            
+            sync_data = {
+                "name": sync_name,
+                # Use actual Blink state for display (frontend expects 'arm', 'snooze')
+                "arm": sync_armed if sync_armed is not None else False,
+                "snooze": sync_snoozed,
+                "cameras": []
+            }
+            
+            # Get cameras for this sync
+            if hasattr(sync, 'cameras'):
+                for camera_name, camera in sync.cameras.items():
+                    # Get actual camera state from Blink
+                    camera_armed = camera.motion_enabled if hasattr(camera, 'motion_enabled') and camera.motion_enabled is not None else False
+                    
+                    # Get snoozed status - avoid hasattr which can trigger async property
+                    camera_snoozed = False
+                    try:
+                        camera_snoozed = await camera.snoozed
+                    except AttributeError:
+                        pass
+                    except Exception as e:
+                        self.logger.debug(f"Could not get snooze status for {camera_name}: {e}")
+                    
+                    camera_data = {
+                        "name": camera_name,
+                        # Use actual Blink state for display (frontend expects 'arm', 'snooze', 'thumbnail')
+                        "arm": camera_armed,
+                        "snooze": camera_snoozed,
+                        # Thumbnail is config-based (not a Blink state)
+                        "thumbnail": camera_name in self.myblink_app.config.thumbnail_cams if self.myblink_app.config else False
+                    }
+                    sync_data["cameras"].append(camera_data)
+            
+            syncs.append(sync_data)
+        
+        return {"syncs": syncs}
+    
+    async def _desnooze_camera_async(self, camera_name: str, camera: Any, sync: Any, sync_name: str) -> bool:
+        """
+        De-snooze a camera by disarming and re-arming the sync, then re-snoozing other cameras.
+        
+        Args:
+            camera_name: Name of the camera to de-snooze
+            camera: Camera object
+            sync: Sync module object
+            sync_name: Name of the sync module
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            self.logger.info(f"De-snoozing camera {camera_name} on sync {sync_name}")
+            
+            # Get list of all snoozed cameras on this sync (excluding the one we're de-snoozing)
+            snoozed_cameras = []
+            if hasattr(sync, 'cameras'):
+                for cam_name, cam in sync.cameras.items():
+                    if cam_name != camera_name:
+                        try:
+                            is_snoozed = await cam.snoozed
+                            if is_snoozed:
+                                snoozed_cameras.append((cam_name, cam))
+                                self.logger.info(f"Found snoozed camera: {cam_name}")
+                        except Exception as e:
+                            self.logger.debug(f"Could not check snooze status for {cam_name}: {e}")
+            
+            # Step 1: Disarm the sync module
+            self.logger.info(f"Disarming sync {sync_name}")
+            await sync.async_arm(False)
+            
+            # Step 2: Re-arm the sync module
+            self.logger.info(f"Re-arming sync {sync_name}")
+            await sync.async_arm(True)
+            
+            # Step 3: Re-snooze all other cameras that were snoozed
+            snooze_time = 300  # 5 minutes
+            for cam_name, cam in snoozed_cameras:
+                try:
+                    self.logger.info(f"Re-snoozing camera {cam_name}")
+                    await cam.async_snooze(snooze_time)
+                except Exception as e:
+                    self.logger.warning(f"Failed to re-snooze camera {cam_name}: {e}")
+            
+            self.logger.info(f"Successfully de-snoozed camera {camera_name}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error de-snoozing camera {camera_name}: {e}", exc_info=True)
+            return False
+    
+    async def _desnooze_sync_async(self, sync: Any, sync_name: str) -> bool:
+        """
+        De-snooze a sync module by disarming and re-arming it.
+        
+        Args:
+            sync: Sync module object
+            sync_name: Name of the sync module
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            self.logger.info(f"De-snoozing sync {sync_name}")
+            
+            # Step 1: Disarm the sync module
+            self.logger.info(f"Disarming sync {sync_name}")
+            await sync.async_arm(False)
+            
+            # Step 2: Re-arm the sync module
+            self.logger.info(f"Re-arming sync {sync_name}")
+            await sync.async_arm(True)
+            
+            self.logger.info(f"Successfully de-snoozed sync {sync_name}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error de-snoozing sync {sync_name}: {e}", exc_info=True)
+            return False
+    
     def _get_config(self) -> Dict[str, Any]:
         """Get current configuration."""
         if not self.myblink_app.config:
-            return {}
+            return {
+                "schedule_interval_hours": 1,
+                "blink_retry_limit": 3,
+                "voipms_sms_wait": 30,
+                "theme": "dark",
+                "blink_username": "",
+                "voipms_username": "",
+                "voipms_did": ""
+            }
         
         config = self.myblink_app.config
         return {
@@ -772,7 +1375,7 @@ class WebServer:
     
     def _update_sync_setting(self, sync_name: str, setting: str, enabled: bool) -> None:
         """Update sync setting and save to file."""
-        if not self.myblink_app.config or not self.myblink_app.blink:
+        if not self.myblink_app.config or not self.myblink_app.blink_handler or not self.myblink_app.blink_handler.blink:
             raise ValueError("Configuration or Blink not initialized")
         
         config = self.myblink_app.config
@@ -791,7 +1394,7 @@ class WebServer:
                 config.no_snooze_syncs.append(sync_name)
             
             # Also update all cameras in this sync
-            sync = self.myblink_app.blink.sync.get(sync_name)
+            sync = self.myblink_app.blink_handler.blink.sync.get(sync_name)
             if sync and hasattr(sync, 'cameras'):
                 for camera_name in sync.cameras.keys():
                     if camera_name in config.snooze_cams:
@@ -816,7 +1419,7 @@ class WebServer:
                 config.no_arm_syncs.append(sync_name)
             
             # Also update all cameras in this sync
-            sync = self.myblink_app.blink.sync.get(sync_name)
+            sync = self.myblink_app.blink_handler.blink.sync.get(sync_name)
             if sync and hasattr(sync, 'cameras'):
                 for camera_name in sync.cameras.keys():
                     if camera_name in config.arm_cams:
@@ -842,14 +1445,49 @@ class WebServer:
         Returns:
             Camera object if found, None otherwise
         """
-        if not self.myblink_app.blink:
+        if not self.myblink_app.blink_handler or not self.myblink_app.blink_handler.blink:
             return None
         
-        for sync_name, sync in self.myblink_app.blink.sync.items():
+        for sync_name, sync in self.myblink_app.blink_handler.blink.sync.items():
             if hasattr(sync, 'cameras') and camera_name in sync.cameras:
                 return sync.cameras[camera_name]
         
         return None
+    
+    def _find_sync_for_camera(self, camera_name: str) -> Optional[tuple[Any, str]]:
+        """
+        Find the sync module that a camera belongs to.
+        
+        Args:
+            camera_name: Name of the camera
+            
+        Returns:
+            Tuple of (sync object, sync name) if found, None otherwise
+        """
+        if not self.myblink_app.blink_handler or not self.myblink_app.blink_handler.blink:
+            return None
+        
+        for sync_name, sync in self.myblink_app.blink_handler.blink.sync.items():
+            if hasattr(sync, 'cameras') and camera_name in sync.cameras:
+                return (sync, sync_name)
+        
+        return None
+
+    
+    def _find_sync(self, sync_name: str) -> Optional[Any]:
+        """
+        Find a sync module by name.
+        
+        Args:
+            sync_name: Name of the sync module to find
+            
+        Returns:
+            Sync module object if found, None otherwise
+        """
+        if not self.myblink_app.blink_handler or not self.myblink_app.blink_handler.blink:
+            return None
+        
+        return self.myblink_app.blink_handler.blink.sync.get(sync_name)
     
     def _optimize_sync_settings(self) -> None:
         """
@@ -858,12 +1496,12 @@ class WebServer:
         If all cameras in a sync have the same setting, move the setting to the
         sync level to reduce API calls.
         """
-        if not self.myblink_app.config or not self.myblink_app.blink:
+        if not self.myblink_app.config or not self.myblink_app.blink_handler or not self.myblink_app.blink_handler.blink:
             return
         
         config = self.myblink_app.config
         
-        for sync_name, sync in self.myblink_app.blink.sync.items():
+        for sync_name, sync in self.myblink_app.blink_handler.blink.sync.items():
             if not hasattr(sync, 'cameras') or not sync.cameras:
                 continue
             
