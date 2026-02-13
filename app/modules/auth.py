@@ -311,14 +311,14 @@ class AuthManager:
                 # Show OIDC login page
                 return '''
                 <!DOCTYPE html>
-                <html>
+                <html data-theme="dark">
                 <head>
                     <title>Login - MyBlink</title>
                     <meta name="viewport" content="width=device-width, initial-scale=1">
                     <style>
                         body {
                             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                            background: #18181b;
                             display: flex;
                             justify-content: center;
                             align-items: center;
@@ -326,17 +326,19 @@ class AuthManager:
                             margin: 0;
                         }
                         .login-box {
-                            background: white;
+                            background: #27272a;
                             padding: 2rem;
                             border-radius: 8px;
-                            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                            border: 1px solid #3f3f46;
+                            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
                             text-align: center;
                             max-width: 400px;
                             width: 90%;
                         }
-                        h1 { margin-top: 0; color: #333; }
+                        h1 { margin-top: 0; color: #fafafa; }
+                        p { color: #a1a1aa; }
                         .btn {
-                            background: #667eea;
+                            background: #71717a;
                             color: white;
                             border: none;
                             padding: 12px 24px;
@@ -346,7 +348,7 @@ class AuthManager:
                             width: 100%;
                             margin-top: 1rem;
                         }
-                        .btn:hover { background: #5568d3; }
+                        .btn:hover { background: #52525b; }
                     </style>
                 </head>
                 <body>
@@ -398,14 +400,14 @@ class AuthManager:
             # Show basic auth login page
             return f'''
             <!DOCTYPE html>
-            <html>
+            <html data-theme="dark">
             <head>
                 <title>Login - MyBlink</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <style>
                     body {{
                         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        background: #18181b;
                         display: flex;
                         justify-content: center;
                         align-items: center;
@@ -413,14 +415,15 @@ class AuthManager:
                         margin: 0;
                     }}
                     .login-box {{
-                        background: white;
+                        background: #27272a;
                         padding: 2rem;
                         border-radius: 8px;
-                        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                        border: 1px solid #3f3f46;
+                        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
                         max-width: 400px;
                         width: 90%;
                     }}
-                    h1 {{ margin-top: 0; color: #333; }}
+                    h1 {{ margin-top: 0; color: #fafafa; }}
                     .form-group {{
                         margin-bottom: 1rem;
                         text-align: left;
@@ -428,23 +431,25 @@ class AuthManager:
                     label {{
                         display: block;
                         margin-bottom: 0.5rem;
-                        color: #555;
+                        color: #a1a1aa;
                         font-weight: 500;
                     }}
                     input {{
                         width: 100%;
                         padding: 10px;
-                        border: 1px solid #ddd;
+                        border: 1px solid #3f3f46;
+                        background: #18181b;
+                        color: #fafafa;
                         border-radius: 4px;
                         font-size: 14px;
                         box-sizing: border-box;
                     }}
                     input:focus {{
                         outline: none;
-                        border-color: #667eea;
+                        border-color: #71717a;
                     }}
                     .btn {{
-                        background: #667eea;
+                        background: #71717a;
                         color: white;
                         border: none;
                         padding: 12px 24px;
@@ -454,10 +459,10 @@ class AuthManager:
                         width: 100%;
                         margin-top: 1rem;
                     }}
-                    .btn:hover {{ background: #5568d3; }}
+                    .btn:hover {{ background: #52525b; }}
                     .error {{
-                        background: #fee;
-                        color: #c33;
+                        background: #7f1d1d;
+                        color: #fca5a5;
                         padding: 10px;
                         border-radius: 4px;
                         margin-bottom: 1rem;

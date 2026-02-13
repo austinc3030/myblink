@@ -1,32 +1,32 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#6b7280">
+    <meta name="theme-color" content="#71717a">
     <title>MyBlink - Configuration</title>
     <style>
         :root {
-            --primary: #6b7280;
-            --primary-dark: #4b5563;
+            --primary: #71717a;
+            --primary-dark: #52525b;
             --surface: #ffffff;
-            --surface-alt: #f3f4f6;
-            --border: #e5e7eb;
-            --text: #111827;
-            --text-secondary: #6b7280;
+            --surface-alt: #f4f4f5;
+            --border: #e4e4e7;
+            --text: #18181b;
+            --text-secondary: #71717a;
             --success: #10b981;
             --error: #ef4444;
             --shadow: rgba(0, 0, 0, 0.1);
         }
         
         [data-theme="dark"] {
-            --primary: #6b7280;
-            --primary-dark: #4b5563;
-            --surface: #1f2937;
-            --surface-alt: #111827;
-            --border: #374151;
-            --text: #f9fafb;
-            --text-secondary: #9ca3af;
+            --primary: #71717a;
+            --primary-dark: #52525b;
+            --surface: #27272a;
+            --surface-alt: #18181b;
+            --border: #3f3f46;
+            --text: #fafafa;
+            --text-secondary: #a1a1aa;
             --success: #34d399;
             --error: #f87171;
             --shadow: rgba(0, 0, 0, 0.3);
@@ -433,11 +433,8 @@
     </div>
 
     <script>
-        // Apply theme based on system preference
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        if (prefersDark) {
-            document.documentElement.setAttribute('data-theme', 'dark');
-        }
+        // Always apply dark theme by default
+        document.documentElement.setAttribute('data-theme', 'dark');
         
         const form = document.getElementById('configForm');
         const submitBtn = document.getElementById('submitBtn');

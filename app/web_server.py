@@ -153,7 +153,11 @@ class WebServer:
             if not self._is_first_run():
                 # Already configured, redirect to main page
                 return redirect('/')
-            return send_from_directory('web_static', 'setup.html')
+            response = send_from_directory('web_static', 'setup.html')
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
         
         # API endpoint to save initial admin credentials
         @self.app.route('/api/setup/admin', methods=['POST'])
@@ -224,27 +228,36 @@ class WebServer:
             # Check if app is configured - redirect to configure
             if not self._is_app_configured():
                 return redirect('/configure')
-            return send_from_directory('web_static', 'index_new.html')
+            response = send_from_directory('web_static', 'index.html')
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
         
         @self.app.route('/static/app.js')
         def app_js():
             """Serve app JavaScript."""
-            return send_from_directory('web_static', 'app_new.js')
-        
-        @self.app.route('/static/app_new.js')
-        def app_new_js():
-            """Serve app JavaScript (new version)."""
-            return send_from_directory('web_static', 'app_new.js')
+            response = send_from_directory('web_static', 'app.js')
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
         
         @self.app.route('/manifest.json')
         def manifest():
             """Serve PWA manifest."""
-            return send_from_directory('web_static', 'manifest.json')
+            response = send_from_directory('web_static', 'manifest.json')
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            return response
         
         @self.app.route('/sw.js')
         def service_worker():
             """Serve service worker."""
-            return send_from_directory('web_static', 'sw.js')
+            response = send_from_directory('web_static', 'sw.js')
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
         
         # Configuration setup route
         @self.app.route('/configure')
@@ -257,7 +270,11 @@ class WebServer:
             # If already configured, redirect to main page
             if self._is_app_configured():
                 return redirect('/')
-            return send_from_directory('web_static', 'configure.html')
+            response = send_from_directory('web_static', 'configure.html')
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
         
         # Configuration API routes
         @self.app.route('/api/config/current')

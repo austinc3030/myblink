@@ -1,37 +1,37 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#2563eb">
+    <meta name="theme-color" content="#71717a">
     <title>MyBlink - Camera Management</title>
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/png" href="/static/icon-192.png">
     <link rel="apple-touch-icon" href="/static/icon-192.png">
     <style>
         :root {
-            --primary: #2563eb;
-            --primary-dark: #1d4ed8;
+            --primary: #71717a;
+            --primary-dark: #52525b;
             --surface: #ffffff;
-            --surface-alt: #f3f4f6;
-            --border: #e5e7eb;
-            --text: #111827;
-            --text-secondary: #6b7280;
+            --surface-alt: #f4f4f5;
+            --border: #e4e4e7;
+            --text: #18181b;
+            --text-secondary: #71717a;
             --success: #10b981;
             --error: #ef4444;
             --shadow: rgba(0, 0, 0, 0.1);
         }
         
         [data-theme="dark"] {
-            --primary: #3b82f6;
-            --primary-dark: #2563eb;
-            --surface: #1f2937;
-            --surface-alt: #111827;
-            --border: #374151;
-            --text: #f9fafb;
-            --text-secondary: #9ca3af;
+            --primary: #71717a;
+            --primary-dark: #52525b;
+            --surface: #27272a;
+            --surface-alt: #18181b;
+            --border: #3f3f46;
+            --text: #fafafa;
+            --text-secondary: #a1a1aa;
             --success: #34d399;
             --error: #f87171;
             --shadow: rgba(0, 0, 0, 0.3);
@@ -62,7 +62,7 @@
         }
         
         .header-content {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
             display: flex;
             justify-content: space-between;
@@ -100,6 +100,11 @@
             transform: scale(0.98);
         }
         
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
         .btn-secondary {
             background: var(--surface-alt);
             color: var(--text);
@@ -111,24 +116,61 @@
         }
         
         .theme-toggle {
-            width: 2.5rem;
-            height: 2.5rem;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
             cursor: pointer;
-            background: var(--surface-alt);
-            border: 1px solid var(--border);
+            font-size: 1.5rem;
+            padding: 0.25rem;
         }
         
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
-            padding: 1rem;
+            padding: 1.5rem;
         }
         
-        .sync-module {
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            border-bottom: 2px solid var(--border);
+            margin-bottom: 1.5rem;
+            overflow-x: auto;
+            scrollbar-width: thin;
+        }
+        
+        .tab {
+            padding: 0.75rem 1.5rem;
+            cursor: pointer;
+            border: none;
+            background: none;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            font-weight: 500;
+            white-space: nowrap;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+        
+        .tab:hover {
+            color: var(--text);
+            background: var(--surface-alt);
+        }
+        
+        .tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* Sync Module Cards */
+        .sync-card {
             background: var(--surface);
             border-radius: 0.75rem;
             padding: 1.5rem;
@@ -140,22 +182,26 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 1rem;
-            gap: 1rem;
-            flex-wrap: wrap;
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            margin: -0.5rem -0.5rem 1rem -0.5rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .sync-header:hover {
+            background: var(--surface-alt);
         }
         
         .sync-name {
             font-size: 1.25rem;
             font-weight: 600;
-            flex: 1;
-            min-width: 200px;
         }
         
         .sync-toggles {
             display: flex;
             gap: 1rem;
-            flex-wrap: wrap;
         }
         
         .toggle-group {
@@ -167,11 +213,11 @@
         .toggle-label {
             font-size: 0.875rem;
             color: var(--text-secondary);
-            user-select: none;
         }
         
         .toggle {
             position: relative;
+            display: inline-block;
             width: 48px;
             height: 24px;
         }
@@ -214,11 +260,12 @@
             transform: translateX(24px);
         }
         
+        /* Camera Grid */
         .cameras-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 1rem;
-            margin-top: 1rem;
+            align-items: start;
         }
         
         .camera-card {
@@ -226,12 +273,31 @@
             border: 1px solid var(--border);
             border-radius: 0.5rem;
             padding: 1rem;
+            height: 100%;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .camera-card:hover {
+            background: var(--surface);
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px var(--shadow);
         }
         
         .camera-name {
             font-weight: 600;
-            margin-bottom: 1rem;
             font-size: 1rem;
+            line-height: 1.5;
+            display: flex;
+            align-items: center;
+        }
+        
+        .camera-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
         }
         
         .camera-toggles {
@@ -240,74 +306,60 @@
             gap: 0.75rem;
         }
         
-        .camera-select-group {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.5rem 0;
-        }
-        
-        .camera-select {
-            padding: 0.375rem 0.5rem;
-            border: 1px solid var(--border);
-            border-radius: 0.375rem;
-            background: var(--surface);
-            color: var(--text);
-            font-size: 0.8125rem;
-            cursor: pointer;
-            min-width: 80px;
-        }
-        
-        .camera-select:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-        
-        .camera-actions {
+        /* Logs */
+        .log-controls {
             display: flex;
             gap: 0.5rem;
-            margin-top: 0.75rem;
-            padding-top: 0.75rem;
-            border-top: 1px solid var(--border);
+            margin-bottom: 1rem;
         }
         
-        .btn-action {
-            flex: 1;
-            padding: 0.5rem;
-            border: none;
-            border-radius: 0.375rem;
-            background: var(--primary);
-            color: white;
-            font-size: 0.8125rem;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-weight: 500;
+        .log-container {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            height: 600px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.8rem;
+            line-height: 1.4;
         }
         
-        .btn-action:hover {
-            background: var(--primary-dark);
+        .log-entry {
+            margin-bottom: 0.25rem;
+            word-wrap: break-word;
         }
         
-        .btn-action:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
+        .log-entry.error {
+            color: var(--error);
         }
         
-        .config-section {
+        .log-entry.warn {
+            color: #f59e0b;
+        }
+        
+        .log-entry.info {
+            color: var(--text-secondary);
+        }
+        
+        /* Settings */
+        .settings-section {
             background: var(--surface);
             border-radius: 0.75rem;
             padding: 1.5rem;
-            margin-top: 2rem;
+            margin-bottom: 1.5rem;
             box-shadow: 0 1px 3px var(--shadow);
         }
         
-        .config-title {
-            font-size: 1.25rem;
+        .settings-title {
+            font-size: 1.125rem;
             font-weight: 600;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border);
         }
         
-        .config-grid {
+        .settings-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
             gap: 1.5rem;
@@ -325,26 +377,90 @@
             color: var(--text-secondary);
         }
         
-        .form-input {
+        .form-input, .form-select {
             padding: 0.75rem;
             border: 1px solid var(--border);
             border-radius: 0.5rem;
-            background: var(--surface);
+            background: var(--surface-alt);
             color: var(--text);
             font-size: 0.875rem;
         }
         
-        .form-input:focus {
+        .form-input:focus, .form-select:focus {
             outline: none;
             border-color: var(--primary);
         }
         
+        /* Utility */
         .loading {
             text-align: center;
             padding: 2rem;
             color: var(--text-secondary);
         }
         
+        #messageArea {
+            position: fixed;
+            bottom: 1.5rem;
+            right: 1.5rem;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            max-width: 400px;
+            pointer-events: none;
+        }
+        
+        .toast {
+            padding: 1rem 1.25rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
+            color: white;
+            font-weight: 500;
+            pointer-events: auto;
+            animation: slideIn 0.3s ease-out;
+            max-width: 100%;
+            word-wrap: break-word;
+        }
+        
+        .toast.error {
+            background: var(--error);
+        }
+        
+        .toast.success {
+            background: var(--success);
+        }
+        
+        .toast.info {
+            background: var(--primary);
+        }
+        
+        @keyframes slideIn {
+            from {
+                transform: translateX(120%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(120%);
+                opacity: 0;
+            }
+        }
+        
+        .toast.hiding {
+            animation: slideOut 0.3s ease-in forwards;
+        }
+        
+        /* Legacy error/success classes for backward compatibility */
         .error {
             background: var(--error);
             color: white;
@@ -361,126 +477,37 @@
             margin-bottom: 1rem;
         }
         
-        @media (max-width: 640px) {
-            .sync-header {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-            
-            .sync-toggles {
-                width: 100%;
-                justify-content: space-between;
-            }
-            
-            .cameras-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .config-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-        
-        .actions {
-            display: flex;
-            gap: 0.5rem;
-            margin-top: 1rem;
-            flex-wrap: wrap;
-        }
-        
-        /* Setup Wizard Styles */
-        .setup-wizard {
-            max-width: 600px;
-            margin: 2rem auto;
-            background: var(--surface);
-            border-radius: 1rem;
-            padding: 2rem;
-            box-shadow: 0 4px 6px var(--shadow);
-        }
-        
-        .setup-title {
-            font-size: 1.75rem;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-            text-align: center;
-        }
-        
-        .setup-subtitle {
-            color: var(--text-secondary);
-            text-align: center;
-            margin-bottom: 2rem;
-            line-height: 1.5;
-        }
-        
-        .setup-section {
-            margin-bottom: 2rem;
-        }
-        
-        .setup-section-title {
-            font-size: 1.25rem;
-            font-weight: 600;
-            margin-bottom: 1rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 2px solid var(--border);
-        }
-        
-        .setup-status {
-            padding: 1rem;
-            border-radius: 0.5rem;
-            margin-top: 1rem;
-            text-align: center;
-            background: var(--surface-alt);
-            color: var(--text-secondary);
-        }
-        
-        .setup-status.success {
-            background: var(--success);
-            color: white;
-        }
-        
-        .setup-status.error {
-            background: var(--error);
-            color: white;
-        }
-        
         .hidden {
             display: none;
         }
         
         /* Modal Styles */
-        .modal {
-            display: none;
+        .modal-overlay {
             position: fixed;
             top: 0;
             left: 0;
-            width: 100%;
-            height: 100%;
+            right: 0;
+            bottom: 0;
             background: rgba(0, 0, 0, 0.5);
-            z-index: 1000;
-            overflow-y: auto;
-        }
-        
-        .modal.active {
             display: flex;
             align-items: center;
             justify-content: center;
+            z-index: 1000;
             padding: 1rem;
         }
         
-        .modal-content {
+        .modal {
             background: var(--surface);
             border-radius: 0.75rem;
-            max-width: 600px;
+            max-width: 700px;
             width: 100%;
-            max-height: 90vh;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            box-shadow: 0 10px 25px var(--shadow);
+            max-height: 85vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
         }
         
         .modal-header {
-            padding: 1.5rem;
+            padding: 1rem 1.25rem;
             border-bottom: 1px solid var(--border);
             display: flex;
             justify-content: space-between;
@@ -488,7 +515,7 @@
         }
         
         .modal-title {
-            font-size: 1.25rem;
+            font-size: 1.125rem;
             font-weight: 600;
         }
         
@@ -499,8 +526,8 @@
             cursor: pointer;
             color: var(--text-secondary);
             padding: 0;
-            width: 2rem;
-            height: 2rem;
+            width: 32px;
+            height: 32px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -509,214 +536,233 @@
         
         .modal-close:hover {
             background: var(--surface-alt);
+            color: var(--text);
         }
         
         .modal-body {
-            padding: 1.5rem;
-            overflow-y: auto;
+            padding: 0;
         }
         
-        .info-group {
-            margin-bottom: 1.5rem;
-        }
-        
-        .info-group-title {
-            font-size: 1rem;
-            font-weight: 600;
-            margin-bottom: 0.75rem;
-            color: var(--text);
-        }
-        
-        .info-item {
+        .modal-tabs {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.5rem 0;
             border-bottom: 1px solid var(--border);
+            background: var(--surface-alt);
         }
         
-        .info-item:last-child {
-            border-bottom: none;
+        .modal-tab {
+            flex: 1;
+            padding: 0.875rem 1rem;
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: var(--text-secondary);
+            font-size: 0.9375rem;
+            font-weight: 500;
+            transition: all 0.2s;
+            border-bottom: 2px solid transparent;
+        }
+        
+        .modal-tab:hover {
+            background: var(--surface);
+            color: var(--primary);
+        }
+        
+        .modal-tab.active {
+            color: var(--primary);
+            background: var(--surface);
+            border-bottom-color: var(--primary);
+        }
+        
+        .modal-tab-content {
+            padding: 1rem 1.25rem;
+            display: none;
+        }
+        
+        .modal-tab-content.active {
+            display: block;
+        }
+        
+        .modal-footer {
+            padding: 1rem 1.25rem;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.5rem;
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 0.5rem;
+        }
+        
+        .info-row {
+            display: grid;
+            grid-template-columns: 120px 1fr;
+            gap: 0.75rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 0.25rem;
+            background: var(--surface-alt);
         }
         
         .info-label {
-            font-weight: 500;
+            font-weight: 600;
             color: var(--text-secondary);
-            font-size: 0.875rem;
+            font-size: 0.8125rem;
         }
         
         .info-value {
-            font-weight: 500;
-            color: var(--text);
-            text-align: right;
-            max-width: 60%;
-            word-wrap: break-word;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.8125rem;
+            word-break: break-all;
         }
         
-        .info-value.media-value {
+        .setting-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .setting-row:last-child {
+            border-bottom: none;
+        }
+        
+        .setting-info {
+            flex: 1;
+            padding-right: 1rem;
+        }
+        
+        .setting-label {
+            font-weight: 600;
+            margin-bottom: 0.125rem;
+            font-size: 0.9375rem;
+        }
+        
+        .setting-description {
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
+            line-height: 1.3;
+        }
+        
+        .camera-buttons {
             display: flex;
             gap: 0.5rem;
+            flex-shrink: 0;
             align-items: center;
-        }
-        
-        .btn-small {
-            padding: 0.25rem 0.75rem;
-            font-size: 0.75rem;
-            border-radius: 0.375rem;
-            border: none;
-            cursor: pointer;
-            background: var(--primary);
-            color: white;
-            transition: all 0.2s;
-        }
-        
-        .btn-small:hover {
-            background: var(--primary-dark);
-        }
-        
-        .btn-small:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
         }
         
         .btn-icon {
-            padding: 0.5rem;
-            border: none;
-            border-radius: 0.375rem;
-            background: var(--surface-alt);
-            color: var(--text);
-            cursor: pointer;
-            font-size: 1rem;
-            transition: all 0.2s;
+            padding: 0;
+            width: 28px;
+            height: 28px;
+            min-width: 28px;
+            min-height: 28px;
             display: flex;
             align-items: center;
             justify-content: center;
+            font-size: 1.1rem;
+            line-height: 1;
+            border-radius: 0.375rem;
+            flex-shrink: 0;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: var(--surface-alt);
+            color: var(--text);
+            box-sizing: border-box;
         }
         
         .btn-icon:hover {
             background: var(--border);
         }
         
-        .camera-header {
+        .btn-icon:active {
+            transform: scale(0.98);
+        }
+        
+        .btn-icon.btn-secondary {
+            background: var(--surface-alt);
+            color: var(--text);
+        }
+        
+        .btn-icon.btn-secondary:hover {
+            background: var(--border);
+        }
+        
+        .sync-title {
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            margin-bottom: 1rem;
+            justify-content: space-between;
+            gap: 0.75rem;
+            flex: 1;
+        }
+        
+        @media (max-width: 768px) {
+            .sync-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 1rem;
+            }
+            
+            .cameras-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .settings-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .info-row {
+                grid-template-columns: 1fr;
+                gap: 0.25rem;
+            }
+            
+            .info-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .modal {
+                max-height: 90vh;
+            }
         }
     </style>
 </head>
 <body>
-    <!-- Setup Wizard (shown when not configured) -->
-    <div id="setupWizard" class="setup-wizard hidden">
-        <div class="setup-title">🎥 Welcome to MyBlink</div>
-        <div class="setup-subtitle">
-            Configure your Blink and VoIP.ms credentials to get started.<br>
-            All settings are stored securely and used only for camera management.
-        </div>
-        
-        <div class="setup-section">
-            <div class="setup-section-title">Blink Account</div>
-            <div class="form-group">
-                <label class="form-label" for="blinkUsername">Email Address</label>
-                <input type="email" id="blinkUsername" class="form-input" placeholder="your@email.com" required>
-            </div>
-            <div class="form-group">
-                <label class="form-label" for="blinkPassword">Password</label>
-                <input type="password" id="blinkPassword" class="form-input" placeholder="Your Blink password" required>
-            </div>
-        </div>
-        
-        <div class="setup-section">
-            <div class="setup-section-title">VoIP.ms Account (for 2FA)</div>
-            <div class="form-group">
-                <label class="form-label" for="voipmsUsername">API Username</label>
-                <input type="text" id="voipmsUsername" class="form-input" placeholder="user@example.com" required>
-            </div>
-            <div class="form-group">
-                <label class="form-label" for="voipmsPassword">API Password</label>
-                <input type="password" id="voipmsPassword" class="form-input" placeholder="Your API password" required>
-            </div>
-            <div class="form-group">
-                <label class="form-label" for="voipmsDid">DID (Phone Number)</label>
-                <input type="text" id="voipmsDid" class="form-input" placeholder="e.g., 5551234567" required>
-            </div>
-        </div>
-        
-        <div class="actions">
-            <button class="btn" id="saveCredsBtn">Save & Start</button>
-        </div>
-        
-        <div id="setupStatus" class="setup-status" style="display: none;"></div>
-    </div>
-    
-    <!-- Main Interface (shown when configured) -->
-    <div id="mainInterface" class="hidden">
-        <div class="header">
-            <div class="header-content">
-                <h1>🎥 MyBlink</h1>
-                <div class="controls">
-                    <button class="btn" id="refreshBtn">Refresh</button>
-                    <button class="btn btn-secondary" id="runJobsBtn">Run Jobs</button>
-                    <div class="theme-toggle" id="themeToggle">
-                        <span id="themeIcon">🌙</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="container">
-            <div id="messageArea"></div>
-            
-            <div id="loadingArea" class="loading">
-                Loading...
-            </div>
-            
-            <div id="contentArea" class="hidden">
-                <!-- Sync modules will be rendered here -->
-            </div>
-            
-            <div class="config-section" id="configSection">
-                <div class="config-title">⚙️ Configuration</div>
-                <div class="config-grid">
-                    <div class="form-group">
-                        <label class="form-label" for="scheduleInterval">Schedule Interval (hours)</label>
-                        <input type="number" id="scheduleInterval" class="form-input" min="1" max="24">
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="retryLimit">Blink Retry Limit</label>
-                        <input type="number" id="retryLimit" class="form-input" min="1" max="10">
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="smsWait">SMS Wait Time (seconds)</label>
-                        <input type="number" id="smsWait" class="form-input" min="10" max="120">
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="themeSelect">Theme</label>
-                        <select id="themeSelect" class="form-input">
-                            <option value="light">Light</option>
-                            <option value="dark">Dark</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="actions">
-                    <button class="btn" id="saveConfigBtn">Save Configuration</button>
+    <div class="header">
+        <div class="header-content">
+            <h1>🎥 MyBlink</h1>
+            <div class="controls">
+                <button class="btn" id="refreshBtn">Refresh</button>
+                <button class="btn btn-secondary" id="runJobsBtn">Run Jobs</button>
+                <div class="theme-toggle" id="themeToggle">
+                    <span id="themeIcon">🌙</span>
                 </div>
             </div>
         </div>
     </div>
     
-    <!-- Camera Info Modal -->
-    <div id="cameraInfoModal" class="modal" onclick="if(event.target === this) app.closeCameraInfo()">
-        <div class="modal-content">
-            <div class="modal-header">
-                <div class="modal-title" id="modalCameraName">Camera Info</div>
-                <button class="modal-close" onclick="app.closeCameraInfo()">×</button>
+    <div class="container">
+        <div id="messageArea"></div>
+        
+        <div id="loadingArea" class="loading">
+            Loading...
+        </div>
+        
+        <div id="tabsContainer" class="hidden">
+            <div class="tabs" id="tabsNav">
+                <!-- Tabs will be dynamically generated -->
             </div>
-            <div class="modal-body" id="modalCameraInfo">
-                Loading...
+            
+            <div id="tabsContent">
+                <!-- Tab content will be dynamically generated -->
             </div>
         </div>
     </div>
+    
+    <!-- Modal Container -->
+    <div id="modalContainer"></div>
     
     <script src="/static/app.js"></script>
 </body>
