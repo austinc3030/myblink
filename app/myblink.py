@@ -94,6 +94,7 @@ class MyBlink:
         self.health_monitor: Optional[HealthMonitor] = None
         self.voipms_handler: Optional[VoipMsHandler] = None
         self.blink_handler: Optional[BlinkHandler] = None
+        self.media_manager: Optional[Any] = None
         
         if self._configured:
             self._initialize_handlers()
@@ -141,12 +142,17 @@ class MyBlink:
         # Initialize health monitor
         self.health_monitor = HealthMonitor(self.config, self.logger)
         
-        # Initialize VoIP.ms handler
-        self.voipms_handler = VoipMsHandler(
-            self.credentials,
-            self.config,
-            self.logger
-        )
+        # Initialize VoIP.ms handler only if credentials provided (for automated 2FA)
+        self.voipms_handler = None
+        if self.credentials.voipms:
+            self.voipms_handler = VoipMsHandler(
+                self.credentials,
+                self.config,
+                self.logger
+            )
+            self.logger.info("VoIP.ms handler initialized for automated 2FA")
+        else:
+            self.logger.info("VoIP.ms handler not initialized (interactive 2FA mode)")
         
         # Initialize Blink handler
         self.blink_handler = BlinkHandler(
@@ -158,7 +164,42 @@ class MyBlink:
             self.logger
         )
         
+        # Initialize media manager
+        self.media_manager = self._initialize_media_manager()
+        
         self.logger.info("Application handlers initialized")
+    
+    def _initialize_media_manager(self) -> Optional[Any]:
+        """
+        Initialize media download manager.
+        
+        Returns:
+            MediaManager instance or None if initialization fails
+        """
+        try:
+            from modules.media_manager import MediaManager, MediaDownloadConfig
+            
+            # Get media config from app config
+            media_config_dict = self.config.get_media_config()
+            media_config = MediaDownloadConfig.from_dict(media_config_dict)
+            
+            # Create media manager
+            manager = MediaManager(
+                self.blink_handler,
+                media_config,
+                self.logger
+            )
+            
+            if media_config.enabled:
+                self.logger.info("Media manager initialized and enabled")
+            else:
+                self.logger.info("Media manager initialized but disabled")
+            
+            return manager
+            
+        except Exception as e:
+            self.logger.error(f"Failed to initialize media manager: {e}", exc_info=True)
+            return None
     
     def _initialize_web_server(self) -> None:
         """
@@ -347,6 +388,13 @@ class MyBlink:
         self.logger.info("Initiating graceful shutdown")
         self._shutdown = True
         
+        # Stop media manager
+        if hasattr(self, 'media_manager') and self.media_manager:
+            try:
+                self.media_manager.stop()
+            except Exception as e:
+                self.logger.error(f"Error stopping media manager: {e}")
+        
         # Stop web server
         if self._web_server:
             try:
@@ -400,6 +448,13 @@ class MyBlink:
             except Exception as e:
                 self.logger.error(f"Failed to start web server: {e}")
                 self._web_server = None
+        
+        # Start media manager if enabled and configured
+        if hasattr(self, 'media_manager') and self.media_manager and self.media_manager.config.enabled:
+            try:
+                self.media_manager.start(loop)
+            except Exception as e:
+                self.logger.error(f"Failed to start media manager: {e}")
         
         try:
             # Run main loop

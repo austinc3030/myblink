@@ -1,6 +1,6 @@
 // Service Worker for MyBlink PWA
 
-const CACHE_NAME = 'myblink-v18';
+const CACHE_NAME = 'myblink-v35';
 const urlsToCache = [
   '/',
   '/static/app.js',

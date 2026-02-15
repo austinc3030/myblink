@@ -190,10 +190,15 @@ class BlinkHandler:
         Handle 2FA authentication flow.
         
         Raises:
-            TwoFactorAuthenticationError: If 2FA process fails
+            TwoFactorAuthenticationError: If 2FA process fails or in interactive mode
         """
         if not self.blink:
             raise AuthenticationError("Blink instance not initialized")
+        
+        # Check if we're in interactive mode (no VoIP.ms handler)
+        if not self.voipms_handler:
+            self.logger.info("2FA required in interactive mode - waiting for user input")
+            raise TwoFactorAuthenticationError("2FA code required - please provide code interactively")
         
         self.logger.info("2FA required, retrieving code from SMS")
         
@@ -265,11 +270,13 @@ class BlinkHandler:
         
         Raises:
             AuthenticationError: If all authentication attempts fail
+            TwoFactorAuthenticationError: If 2FA is required and in interactive mode
         """
         self.logger.info("Initializing Blink API connection")
         
-        # Clean up old SMS messages first
-        self.voipms_handler.delete_blink_sms_messages()
+        # Clean up old SMS messages first (only if VoIP.ms handler available)
+        if self.voipms_handler:
+            self.voipms_handler.delete_blink_sms_messages()
         
         async with self._get_session() as session:
             # Try cached credentials first

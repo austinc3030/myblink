@@ -8,11 +8,13 @@ including toggling snooze/arm/thumbnail operations and configuration.
 import asyncio
 import json
 import logging
+import os
+import secrets
 import yaml
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, jsonify, request, send_from_directory, Response, redirect, session
+from flask import Flask, jsonify, request, send_from_directory, send_file, Response, redirect, session
 from flask_login import login_user
 from werkzeug.serving import make_server
 import threading
@@ -20,6 +22,7 @@ import threading
 # Import authentication modules
 from modules import AuthConfig, AuthManager
 from modules.auth import User
+from modules.media_manager import MediaDownloadConfig
 
 # Type checking
 try:
@@ -62,6 +65,10 @@ class WebServer:
                          static_folder='web_static',
                          static_url_path='/static')
         
+        # Always set secret key for sessions (required even during setup)
+        if not self.app.secret_key:
+            self.app.secret_key = os.environ.get('FLASK_SECRET_KEY', secrets.token_hex(32))
+        
         # Initialize authentication
         self.auth_manager: Optional[AuthManager] = None
         self._init_authentication()
@@ -96,14 +103,13 @@ class WebServer:
     
     def _is_app_configured(self) -> bool:
         """Check if application credentials are configured."""
-        config = self.myblink_app.config
-        # App is configured if we have Blink and VoIP.ms credentials
+        # App is configured ONLY if Blink handler is initialized and available
+        # This supports both interactive (Blink only) and automated (Blink + VoIP.ms) modes
+        # Don't use fallback checks to prevent partial setups from bypassing config flow
         return bool(
-            config.blink_username and 
-            config.blink_password and 
-            config.voipms_username and 
-            config.voipms_password and 
-            config.voipms_did
+            self.myblink_app.blink_handler and 
+            self.myblink_app.blink_handler.blink and 
+            self.myblink_app.blink_handler.blink.available
         )
     
     def _setup_log_handler(self) -> None:
@@ -299,43 +305,111 @@ class WebServer:
             try:
                 data = request.get_json()
                 
-                # Validate required fields
-                required = ['blink_username', 'blink_password', 'voipms_username', 'voipms_password', 'voipms_did']
-                for field in required:
-                    if not data.get(field):
-                        return jsonify({'error': f'Missing required field: {field}'}), 400
+                # Get 2FA method (default to interactive for backward compatibility)
+                twofa_method = data.get('twofa_method', 'interactive')
+                
+                # Validate Blink fields (always required)
+                if not data.get('blink_username'):
+                    return jsonify({'error': 'Missing required field: blink_username'}), 400
+                if not data.get('blink_password'):
+                    return jsonify({'error': 'Missing required field: blink_password'}), 400
+                
+                # Validate VoIP.ms fields only if automated method
+                if twofa_method == 'automated':
+                    required_voipms = ['voipms_username', 'voipms_password', 'voipms_did']
+                    for field in required_voipms:
+                        if not data.get(field):
+                            return jsonify({'error': f'Missing required field for automated 2FA: {field}'}), 400
                 
                 # Transform flat structure to nested structure for set_credentials
                 creds_dict = {
                     'blink': {
                         'username': data['blink_username'].strip(),
                         'password': data['blink_password']
-                    },
-                    'voipms': {
+                    }
+                }
+                
+                # Add VoIP.ms credentials only if automated method
+                if twofa_method == 'automated':
+                    creds_dict['voipms'] = {
                         'username': data['voipms_username'].strip(),
                         'password': data['voipms_password'],
                         'did': data['voipms_did'].strip()
                     }
-                }
                 
                 # Set credentials (this will also initialize services)
                 self.myblink_app.set_credentials(creds_dict)
                 
+                # Store 2FA method in session for later use
+                session['twofa_method'] = twofa_method
+                
                 # Trigger async initialization of Blink connection
                 if self.myblink_app._event_loop and self.myblink_app.blink_handler:
                     try:
+                        # Import the exception class
+                        from blinkpy.auth import BlinkTwoFARequiredError
+                        
                         future = asyncio.run_coroutine_threadsafe(
                             self.myblink_app.blink_handler.initialize(),
                             self.myblink_app._event_loop
                         )
-                        # Wait up to 30 seconds for initialization
-                        future.result(timeout=30)
+                        # Wait up to 45 seconds for initialization (increased timeout)
+                        future.result(timeout=45)
                         self.logger.info("Blink initialized successfully")
-                    except Exception as init_error:
-                        self.logger.error(f"Failed to initialize Blink: {init_error}")
+                    except asyncio.TimeoutError:
+                        # Timeout - but Blink may still initialize in background
+                        self.logger.warning("Blink initialization timed out (still running in background)")
                         return jsonify({
-                            'error': f'Credentials saved but Blink initialization failed: {str(init_error)}'
-                        }), 500
+                            'success': True,
+                            'message': 'Credentials saved. Blink is connecting in the background...',
+                            'warning': 'Connection is taking longer than expected'
+                        })
+                    except Exception as init_error:
+                        # Import exception classes for comparison
+                        from blinkpy.auth import BlinkTwoFARequiredError
+                        from modules.exceptions import TwoFactorAuthenticationError
+                        
+                        # Check if it's a 2FA required error
+                        error_type_name = type(init_error).__name__
+                        is_2fa_error = (
+                            isinstance(init_error, (BlinkTwoFARequiredError, TwoFactorAuthenticationError)) or
+                            'TwoFactorAuthentication' in error_type_name or 
+                            'BlinkTwoFARequired' in error_type_name
+                        )
+                        
+                        if is_2fa_error:
+                            # For interactive mode, return requires_2fa flag
+                            if twofa_method == 'interactive':
+                                self.logger.info("2FA required for interactive mode")
+                                # Store blink auth object in session (we'll need it for verification)
+                                # Note: We can't directly serialize the auth object, but the blink_handler retains it
+                                session['pending_2fa'] = True
+                                return jsonify({
+                                    'success': True,
+                                    'requires_2fa': True,
+                                    'message': '2FA code required'
+                                })
+                            else:
+                                # For automated mode, it should handle 2FA automatically
+                                self.logger.error(f"2FA error in automated mode (unexpected): {init_error}")
+                                return jsonify({
+                                    'error': f'Automated 2FA failed: {str(init_error)}'
+                                }), 500
+                        
+                        self.logger.error(f"Failed to initialize Blink: {init_error}", exc_info=True)
+                        # Check if it's an authentication error vs other error
+                        error_msg = str(init_error).lower()
+                        if 'auth' in error_msg or 'login' in error_msg or 'password' in error_msg or 'credential' in error_msg:
+                            return jsonify({
+                                'error': f'Blink authentication failed: {str(init_error)}. Please check your credentials.'
+                            }), 401
+                        else:
+                            # Other errors - credentials saved but connect failed
+                            return jsonify({
+                                'success': True,
+                                'message': 'Credentials saved. Blink will retry connection in the background.',
+                                'warning': f'Initial connection attempt failed: {str(init_error)}'
+                            })
                 
                 self.logger.info(f"Configuration saved for Blink user: {data['blink_username']}")
                 
@@ -348,6 +422,83 @@ class WebServer:
                 self.logger.error(f"Failed to save configuration: {e}")
                 return jsonify({'error': str(e)}), 500
         
+        @self.app.route('/api/config/verify-2fa', methods=['POST'])
+        @self._require_auth
+        def verify_2fa():
+            """Verify 2FA code for interactive authentication."""
+            try:
+                data = request.get_json()
+                code = data.get('code', '').strip()
+                
+                if not code or len(code) != 6 or not code.isdigit():
+                    return jsonify({'error': 'Invalid 2FA code format'}), 400
+                
+                # Check if we have a pending 2FA session
+                if not session.get('pending_2fa'):
+                    return jsonify({'error': 'No pending 2FA session found'}), 400
+                
+                # Get the blink handler which should have the auth object with pending 2FA state
+                if not self.myblink_app.blink_handler or not self.myblink_app.blink_handler.blink:
+                    return jsonify({'error': 'Blink not initialized'}), 500
+                
+                # Complete 2FA login
+                self.logger.info(f"Attempting to verify 2FA code")
+                
+                if self.myblink_app._event_loop:
+                    try:
+                        # Define async completion function
+                        async def complete_blink_setup():
+                            # Step 1: Complete 2FA login
+                            blink = self.myblink_app.blink_handler.blink
+                            success = await blink.auth.complete_2fa_login(code)
+                            
+                            if not success:
+                                return False
+                            
+                            # Step 2: Complete Blink setup steps
+                            blink.setup_urls()
+                            await blink.get_homescreen()
+                            await blink.setup_post_verify()
+                            
+                            return True
+                        
+                        # Execute the async function
+                        future = asyncio.run_coroutine_threadsafe(
+                            complete_blink_setup(),
+                            self.myblink_app._event_loop
+                        )
+                        success = future.result(timeout=30)
+                        
+                        if not success:
+                            self.logger.error("2FA verification returned False")
+                            return jsonify({'error': 'Invalid 2FA code. Please try again.'}), 401
+                        
+                        # Clear pending 2FA flag
+                        session.pop('pending_2fa', None)
+                        
+                        # Save credentials with tokens
+                        self.myblink_app.blink_handler._save_blink_credentials()
+                        
+                        self.logger.info("2FA authentication complete")
+                        
+                        return jsonify({
+                            'success': True,
+                            'message': 'Authentication successful'
+                        })
+                        
+                    except asyncio.TimeoutError:
+                        self.logger.error("2FA verification timed out")
+                        return jsonify({'error': '2FA verification timed out'}), 500
+                    except Exception as verify_error:
+                        self.logger.error(f"2FA verification failed: {verify_error}", exc_info=True)
+                        return jsonify({'error': f'2FA verification failed: {str(verify_error)}'}), 500
+                else:
+                    return jsonify({'error': 'Event loop not available'}), 500
+                    
+            except Exception as e:
+                self.logger.error(f"Failed to verify 2FA: {e}", exc_info=True)
+                return jsonify({'error': str(e)}), 500
+        
         @self.app.route('/api/config/test', methods=['POST'])
         @self._require_auth
         def test_config():
@@ -355,17 +506,24 @@ class WebServer:
             try:
                 data = request.get_json()
                 
-                # For now, just validate the format
-                # Full connection testing could be added later
+                # Validate the format
                 blink_username = data.get('blink_username', '').strip()
+                blink_password = data.get('blink_password', '').strip()
                 voipms_username = data.get('voipms_username', '').strip()
+                voipms_password = data.get('voipms_password', '').strip()
                 voipms_did = data.get('voipms_did', '').strip()
                 
                 if not '@' in blink_username:
                     return jsonify({'error': 'Invalid Blink email address'}), 400
                 
+                if not blink_password:
+                    return jsonify({'error': 'Blink password is required'}), 400
+                
                 if not '@' in voipms_username:
                     return jsonify({'error': 'Invalid VoIP.ms email address'}), 400
+                
+                if not voipms_password:
+                    return jsonify({'error': 'VoIP.ms password is required'}), 400
                 
                 if not voipms_did.isdigit() or len(voipms_did) < 10:
                     return jsonify({'error': 'Invalid phone number (must be at least 10 digits)'}), 400
@@ -785,7 +943,7 @@ class WebServer:
         
         @self.app.route('/api/camera/<camera_name>/media/clips', methods=['GET'])
         @self._require_auth
-        def get_camera_clips(camera_name: str):
+        def get_camera_recent_clips(camera_name: str):
             """Get list of recent clips for a camera."""
             try:
                 camera = self._find_camera(camera_name)
@@ -1094,6 +1252,476 @@ class WebServer:
                 self.logger.error(f"Error clearing logs: {e}")
                 return jsonify({"error": str(e)}), 500
         
+        @self.app.route('/api/system/reset', methods=['POST'])
+        @self._require_auth
+        def reset_system():
+            """Reset the entire system - delete all data, credentials, and saved media."""
+            try:
+                import shutil
+                from pathlib import Path
+                
+                self.logger.warning("System reset initiated - deleting all data")
+                
+                # 1. Clear logs
+                self.web_logs.clear()
+                self.blink_logs.clear()
+                
+                # 2. Delete saved media (clips and thumbnails)
+                media_base_path = Path(self.myblink_app.config.media_download_base_path)
+                if media_base_path.exists():
+                    self.logger.info(f"Deleting media directory: {media_base_path}")
+                    shutil.rmtree(media_base_path, ignore_errors=True)
+                    self.logger.info("Media directory deleted")
+                
+                # 3. Delete media tracking file
+                tracking_file = media_base_path / "media_tracking.json"
+                if tracking_file.exists():
+                    tracking_file.unlink()
+                    self.logger.info("Media tracking file deleted")
+                
+                # 4. Clear credentials from config
+                self.myblink_app.config.blink_username = ""
+                self.myblink_app.config.blink_password = ""
+                self.myblink_app.config.blink_cached_credentials = None
+                self.myblink_app.config.voipms_username = ""
+                self.myblink_app.config.voipms_password = ""
+                self.myblink_app.config.voipms_did = ""
+                
+                # 5. Clear authentication
+                self.myblink_app.config.auth_enabled = False
+                self.myblink_app.config.auth_basic_username = "admin"
+                self.myblink_app.config.auth_basic_password_hash = ""
+                
+                # 5.5. Clear session data (2FA flags, etc.)
+                try:
+                    session.clear()
+                    self.logger.info("Session data cleared")
+                except Exception as session_err:
+                    self.logger.warning(f"Failed to clear session: {session_err}")
+                
+                # 6. Reset media download settings
+                self.myblink_app.config.media_download_enabled = False
+                
+                # 7. Clear UI state
+                ui_state_file = Path("/app/data/ui_state.json")
+                if ui_state_file.exists():
+                    ui_state_file.unlink()
+                    self.logger.info("UI state file deleted")
+                
+                # 8. Clear health file
+                health_file = Path(self.myblink_app.config.health_file)
+                if health_file.exists():
+                    health_file.unlink()
+                    self.logger.info("Health file deleted")
+                
+                # 9. Save the cleared config
+                self.myblink_app.config_manager.save_config()
+                
+                # 10. Clear credentials
+                self.myblink_app.credentials = None
+                self.myblink_app._configured = False
+                
+                # 11. Cleanup Blink handler
+                if self.myblink_app.blink_handler:
+                    if self.myblink_app._event_loop:
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                self.myblink_app.blink_handler.cleanup_session(),
+                                self.myblink_app._event_loop
+                            ).result(timeout=5)
+                        except:
+                            pass
+                    self.myblink_app.blink_handler = None
+                
+                self.logger.warning("System reset complete")
+                
+                return jsonify({
+                    "success": True,
+                    "message": "System reset complete. Please log in again to reconfigure."
+                })
+            except Exception as e:
+                self.logger.error(f"Error resetting system: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/ui_state')
+        @self._require_auth
+        def get_ui_state():
+            """Get stored UI state (collapsed syncs, custom ordering)."""
+            try:
+                state = self._load_ui_state()
+                return jsonify(state)
+            except Exception as e:
+                self.logger.error(f"Error getting UI state: {e}")
+                # Return default state on error
+                return jsonify({
+                    "collapsedSyncs": {},
+                    "syncOrder": [],
+                    "cameraOrder": {}
+                })
+        
+        @self.app.route('/api/ui_state', methods=['POST'])
+        @self._require_auth
+        def save_ui_state():
+            """Save UI state (collapsed syncs, custom ordering)."""
+            try:
+                data = request.get_json()
+                if not data:
+                    return jsonify({"error": "No data provided"}), 400
+                
+                self._save_ui_state(data)
+                return jsonify({"success": True})
+            except Exception as e:
+                self.logger.error(f"Error saving UI state: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/media/config')
+        @self._require_auth
+        def get_media_config():
+            """Get media download configuration."""
+            try:
+                config = self.myblink_app.config
+                media_config = config.get_media_config()
+                return jsonify(media_config)
+            except Exception as e:
+                self.logger.error(f"Error getting media config: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/media/config', methods=['POST'])
+        @self._require_auth
+        def save_media_config():
+            """Save media download configuration."""
+            try:
+                data = request.get_json()
+                if not data:
+                    return jsonify({"error": "No data provided"}), 400
+                
+                # Use the app's current config object (don't load a new one)
+                config = self.myblink_app.config
+                
+                # Update media fields
+                if "enabled" in data:
+                    config.media_download_enabled = data["enabled"]
+                if "download_clips" in data:
+                    config.media_download_clips = data["download_clips"]
+                if "download_thumbnails" in data:
+                    config.media_download_thumbnails = data["download_thumbnails"]
+                if "base_path" in data:
+                    config.media_download_base_path = data["base_path"]
+                if "retention_type" in data:
+                    config.media_retention_type = data["retention_type"]
+                if "retention_count" in data:
+                    config.media_retention_count = int(data["retention_count"])
+                if "retention_days" in data:
+                    config.media_retention_days = int(data["retention_days"])
+                if "retention_size_gb" in data:
+                    config.media_retention_size_gb = float(data["retention_size_gb"])
+                if "use_nas" in data:
+                    config.media_use_nas = data["use_nas"]
+                if "nas_type" in data:
+                    config.media_nas_type = data["nas_type"]
+                if "nas_host" in data:
+                    config.media_nas_host = data["nas_host"]
+                if "nas_share" in data:
+                    config.media_nas_share = data["nas_share"]
+                if "nas_username" in data:
+                    config.media_nas_username = data["nas_username"]
+                if "nas_password" in data:
+                    config.media_nas_password = data["nas_password"]
+                if "nas_mount_point" in data:
+                    config.media_nas_mount_point = data["nas_mount_point"]
+                if "check_interval_minutes" in data:
+                    config.media_check_interval_minutes = int(data["check_interval_minutes"])
+                
+                # Save config
+                self.myblink_app.config_manager.save_config()
+                
+                # Update media manager if it exists
+                if hasattr(self.myblink_app, 'media_manager') and self.myblink_app.media_manager:
+                    try:
+                        old_enabled = self.myblink_app.media_manager.config.enabled
+                        new_config_dict = config.get_media_config()
+                        new_media_config = MediaDownloadConfig.from_dict(new_config_dict)
+                        
+                        # Update config
+                        self.myblink_app.media_manager.config = new_media_config
+                        
+                        # Restart if needed
+                        if old_enabled and not new_media_config.enabled:
+                            self.myblink_app.media_manager.stop()
+                            self.logger.info("Media manager stopped")
+                        elif not old_enabled and new_media_config.enabled:
+                            if self.myblink_app._event_loop:
+                                self.myblink_app.media_manager.start(self.myblink_app._event_loop)
+                                self.logger.info("Media manager started")
+                    except Exception as mm_error:
+                        self.logger.warning(f"Failed to update media manager (config saved): {mm_error}")
+                
+                return jsonify({"success": True})
+            except Exception as e:
+                self.logger.error(f"Error saving media config: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/media/status')
+        @self._require_auth
+        def get_media_status():
+            """Get media download status and statistics."""
+            try:
+                if not hasattr(self.myblink_app, 'media_manager') or not self.myblink_app.media_manager:
+                    return jsonify({
+                        "enabled": False,
+                        "running": False
+                    })
+                
+                # Calculate statistics
+                base_path = self.myblink_app.media_manager._get_storage_path()
+                total_clips = 0
+                total_thumbnails = 0
+                total_size = 0
+                
+                # Count clips
+                clips_path = base_path / "clips"
+                if clips_path.exists():
+                    for file in clips_path.rglob("*"):
+                        if file.is_file():
+                            total_clips += 1
+                            total_size += file.stat().st_size
+                
+                # Count thumbnails
+                thumbnails_path = base_path / "thumbnails"
+                if thumbnails_path.exists():
+                    for file in thumbnails_path.rglob("*"):
+                        if file.is_file():
+                            total_thumbnails += 1
+                            total_size += file.stat().st_size
+                
+                return jsonify({
+                    "enabled": self.myblink_app.media_manager.config.enabled,
+                    "running": self.myblink_app.media_manager.is_running,
+                    "total_clips": total_clips,
+                    "total_thumbnails": total_thumbnails,
+                    "total_size_bytes": total_size,
+                    "total_size_mb": round(total_size / (1024 * 1024), 2),
+                    "base_path": str(base_path)
+                })
+            except Exception as e:
+                self.logger.error(f"Error getting media status: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/media/download', methods=['POST'])
+        @self._require_auth
+        def trigger_media_download():
+            """Manually trigger media download."""
+            try:
+                if not hasattr(self.myblink_app, 'media_manager') or not self.myblink_app.media_manager:
+                    return jsonify({"error": "Media manager not available"}), 400
+                
+                if not self.myblink_app.media_manager.config.enabled:
+                    return jsonify({"error": "Media download not enabled"}), 400
+                
+                # Trigger download in the event loop
+                if self.myblink_app and self.myblink_app._event_loop:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.myblink_app.media_manager.check_and_download_new_media(),
+                        self.myblink_app._event_loop
+                    )
+                    # Don't wait for completion, return immediately
+                    return jsonify({"success": True, "message": "Download started"})
+                else:
+                    return jsonify({"error": "Event loop not available"}), 500
+                    
+            except Exception as e:
+                self.logger.error(f"Error triggering media download: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/media/camera/<camera_name>/clips', methods=['GET'])
+        @self._require_auth
+        def get_camera_saved_clips(camera_name):
+            """Get list of saved clips for a camera."""
+            try:
+                if not hasattr(self.myblink_app, 'media_manager') or not self.myblink_app.media_manager:
+                    return jsonify({"clips": [], "message": "Media manager not available"})
+                
+                # Check if media saving is enabled
+                if not self.myblink_app.media_manager.config.enabled:
+                    return jsonify({
+                        "clips": [],
+                        "message": "Automatic media saving is disabled. Enable it in Settings > Media to save clips locally.",
+                        "disabled": True
+                    })
+                
+                # Check if clip downloads are enabled
+                if not self.myblink_app.media_manager.config.download_clips:
+                    return jsonify({
+                        "clips": [],
+                        "message": "Clip downloads are disabled. Enable 'Download Clips' in Settings > Media to save video clips.",
+                        "disabled": True
+                    })
+                
+                # Find the sync module for this camera
+                sync_name = None
+                if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
+                    for sn, sync in self.myblink_app.blink_handler.blink.sync.items():
+                        if hasattr(sync, 'cameras') and camera_name in sync.cameras:
+                            sync_name = sn
+                            break
+                
+                if not sync_name:
+                    return jsonify({"clips": []})
+                
+                # Get clips directory path
+                clips_path = self.myblink_app.media_manager._get_camera_clip_path(sync_name, camera_name)
+                
+                if not clips_path.exists():
+                    return jsonify({"clips": [], "message": "No clips saved yet. New clips will appear here as they are recorded."})
+                
+                # List all mp4 files
+                clips = []
+                for clip_file in sorted(clips_path.glob("*.mp4"), reverse=True):
+                    stat = clip_file.stat()
+                    # Check if thumbnail exists
+                    thumb_path = clip_file.with_suffix('.jpg')
+                    thumb_url = None
+                    if thumb_path.exists():
+                        thumb_url = f"/api/media/clip/thumbnail/{sync_name}/{camera_name}/{thumb_path.name}"
+                    
+                    clips.append({
+                        "filename": clip_file.name,
+                        "size": stat.st_size,
+                        "modified": stat.st_mtime,
+                        "path": f"/api/media/clip/{sync_name}/{camera_name}/{clip_file.name}",
+                        "thumbnail": thumb_url
+                    })
+                
+                if len(clips) == 0:
+                    return jsonify({"clips": [], "message": "No clips saved yet. New clips will appear here as they are recorded."})
+                
+                return jsonify({"clips": clips})
+                
+            except Exception as e:
+                self.logger.error(f"Error getting camera clips: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/media/camera/<camera_name>/thumbnails', methods=['GET'])
+        @self._require_auth
+        def get_camera_saved_thumbnails(camera_name):
+            """Get list of saved thumbnails for a camera."""
+            try:
+                if not hasattr(self.myblink_app, 'media_manager') or not self.myblink_app.media_manager:
+                    return jsonify({"thumbnails": [], "message": "Media manager not available"})
+                
+                # Check if media saving is enabled
+                if not self.myblink_app.media_manager.config.enabled:
+                    return jsonify({
+                        "thumbnails": [],
+                        "message": "Automatic media saving is disabled. Enable it in Settings > Media to save thumbnails locally.",
+                        "disabled": True
+                    })
+                
+                # Check if thumbnail downloads are enabled
+                if not self.myblink_app.media_manager.config.download_thumbnails:
+                    return jsonify({
+                        "thumbnails": [],
+                        "message": "Thumbnail downloads are disabled. Enable 'Download Thumbnails' in Settings > Media to save camera snapshots.",
+                        "disabled": True
+                    })
+                
+                # Find the sync module for this camera
+                sync_name = None
+                if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
+                    for sn, sync in self.myblink_app.blink_handler.blink.sync.items():
+                        if hasattr(sync, 'cameras') and camera_name in sync.cameras:
+                            sync_name = sn
+                            break
+                
+                if not sync_name:
+                    return jsonify({"thumbnails": []})
+                
+                # Get thumbnails directory path
+                thumbnails_path = self.myblink_app.media_manager._get_camera_thumbnail_path(sync_name, camera_name)
+                
+                if not thumbnails_path.exists():
+                    return jsonify({"thumbnails": [], "message": "No thumbnails saved yet. New thumbnails will appear here as they are captured."})
+                
+                # List all jpg files
+                thumbnails = []
+                for thumb_file in sorted(thumbnails_path.glob("*.jpg"), reverse=True):
+                    stat = thumb_file.stat()
+                    thumbnails.append({
+                        "filename": thumb_file.name,
+                        "size": stat.st_size,
+                        "modified": stat.st_mtime,
+                        "path": f"/api/media/thumbnail/{sync_name}/{camera_name}/{thumb_file.name}"
+                    })
+                
+                if len(thumbnails) == 0:
+                    return jsonify({"thumbnails": [], "message": "No thumbnails saved yet. New thumbnails will appear here as they are captured."})
+                
+                return jsonify({"thumbnails": thumbnails})
+                
+            except Exception as e:
+                self.logger.error(f"Error getting camera thumbnails: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/media/clip/<sync_name>/<camera_name>/<filename>', methods=['GET'])
+        @self._require_auth
+        def serve_clip(sync_name, camera_name, filename):
+            """Serve a video clip file."""
+            try:
+                if not hasattr(self.myblink_app, 'media_manager') or not self.myblink_app.media_manager:
+                    return jsonify({"error": "Media manager not available"}), 400
+                
+                clips_path = self.myblink_app.media_manager._get_camera_clip_path(sync_name, camera_name)
+                file_path = clips_path / filename
+                
+                if not file_path.exists() or not file_path.is_file():
+                    return jsonify({"error": "File not found"}), 404
+                
+                return send_file(str(file_path), mimetype='video/mp4')
+                
+            except Exception as e:
+                self.logger.error(f"Error serving clip: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/media/thumbnail/<sync_name>/<camera_name>/<filename>', methods=['GET'])
+        @self._require_auth
+        def serve_thumbnail(sync_name, camera_name, filename):
+            """Serve a thumbnail image file."""
+            try:
+                if not hasattr(self.myblink_app, 'media_manager') or not self.myblink_app.media_manager:
+                    return jsonify({"error": "Media manager not available"}), 400
+                
+                thumbnails_path = self.myblink_app.media_manager._get_camera_thumbnail_path(sync_name, camera_name)
+                file_path = thumbnails_path / filename
+                
+                if not file_path.exists() or not file_path.is_file():
+                    return jsonify({"error": "File not found"}), 404
+                
+                return send_file(str(file_path), mimetype='image/jpeg')
+                
+            except Exception as e:
+                self.logger.error(f"Error serving thumbnail: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/media/clip/thumbnail/<sync_name>/<camera_name>/<filename>', methods=['GET'])
+        @self._require_auth
+        def serve_clip_thumbnail(sync_name, camera_name, filename):
+            """Serve a video clip thumbnail image file."""
+            try:
+                if not hasattr(self.myblink_app, 'media_manager') or not self.myblink_app.media_manager:
+                    return jsonify({"error": "Media manager not available"}), 400
+                
+                clips_path = self.myblink_app.media_manager._get_camera_clip_path(sync_name, camera_name)
+                file_path = clips_path / filename
+                
+                if not file_path.exists() or not file_path.is_file():
+                    return jsonify({"error": "File not found"}), 404
+                
+                return send_file(str(file_path), mimetype='image/jpeg')
+                
+            except Exception as e:
+                self.logger.error(f"Error serving clip thumbnail: {e}")
+                return jsonify({"error": str(e)}), 500
+        
         @self.app.route('/api/credentials', methods=['POST'])
         @self._require_auth
         def update_credentials():
@@ -1338,6 +1966,8 @@ class WebServer:
             self.myblink_app.config.voipms_sms_wait = int(data['voipms_sms_wait'])
         if 'theme' in data:
             self.myblink_app.config.web_theme = data['theme']
+        if 'web_time_format' in data:
+            self.myblink_app.config.web_time_format = data['web_time_format']
         
         # Save to file
         self._save_config_to_file()
@@ -1562,6 +2192,47 @@ class WebServer:
         self.myblink_app.config_manager.save_config()
         
         self.logger.info("Configuration saved")
+    
+    def _load_ui_state(self) -> Dict[str, Any]:
+        """Load UI state from JSON file."""
+        ui_state_file = Path("/app/ui_state.json")
+        
+        try:
+            if ui_state_file.exists():
+                with open(ui_state_file, 'r') as f:
+                    state = json.load(f)
+                    # Ensure all required keys exist
+                    state.setdefault("collapsedSyncs", {})
+                    state.setdefault("syncOrder", [])
+                    state.setdefault("cameraOrder", {})
+                    return state
+        except Exception as e:
+            self.logger.warning(f"Failed to load UI state: {e}")
+        
+        # Return default state
+        return {
+            "collapsedSyncs": {},
+            "syncOrder": [],
+            "cameraOrder": {}
+        }
+    
+    def _save_ui_state(self, state: Dict[str, Any]) -> None:
+        """Save UI state to JSON file."""
+        ui_state_file = Path("/app/ui_state.json")
+        
+        try:
+            # Ensure all required keys exist
+            state.setdefault("collapsedSyncs", {})
+            state.setdefault("syncOrder", [])
+            state.setdefault("cameraOrder", {})
+            
+            with open(ui_state_file, 'w') as f:
+                json.dump(state, f, indent=2)
+            
+            self.logger.info("UI state saved")
+        except Exception as e:
+            self.logger.error(f"Failed to save UI state: {e}")
+            raise
     
     def start(self) -> None:
         """Start the web server in a background thread."""

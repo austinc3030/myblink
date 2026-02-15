@@ -138,44 +138,54 @@ class ConfigManager:
             voipms_pass = os.getenv(VOIPMS_PASSWORD_ENV)
             voipms_did = os.getenv(VOIPMS_DID_ENV)
             
-            if all([blink_user, blink_pass, voipms_user, voipms_pass, voipms_did]):
-                # Found in environment variables - save to config for web UI editing
+            if blink_user and blink_pass:
+                # Found Blink credentials in environment variables
                 if self.config:
                     self.config.blink_username = blink_user
                     self.config.blink_password = blink_pass
-                    self.config.voipms_username = voipms_user
-                    self.config.voipms_password = voipms_pass
-                    self.config.voipms_did = voipms_did
                     save_to_config = True
                 
                 creds_dict = {
                     "blink": {
                         "username": blink_user,
                         "password": blink_pass
-                    },
-                    "voipms": {
+                    }
+                }
+                
+                # Add VoIP.ms credentials if all are present
+                if all([voipms_user, voipms_pass, voipms_did]):
+                    if self.config:
+                        self.config.voipms_username = voipms_user
+                        self.config.voipms_password = voipms_pass
+                        self.config.voipms_did = voipms_did
+                    
+                    creds_dict["voipms"] = {
                         "username": voipms_user,
                         "password": voipms_pass,
                         "did": voipms_did
                     }
-                }
+                
                 source = "environment variables"
                 self.logger.info("Credentials loaded from environment variables (will save to config)")
             
             # Priority 2: Check config file
-            elif self.config and self.config.blink_username and self.config.voipms_username:
+            elif self.config and self.config.blink_username:
                 creds_dict = {
                     "blink": {
                         "username": self.config.blink_username,
                         "password": self.config.blink_password,
                         "cached_credentials": self.config.blink_cached_credentials
-                    },
-                    "voipms": {
+                    }
+                }
+                
+                # Add VoIP.ms credentials if available
+                if self.config.voipms_username:
+                    creds_dict["voipms"] = {
                         "username": self.config.voipms_username,
                         "password": self.config.voipms_password,
                         "did": self.config.voipms_did
                     }
-                }
+                
                 source = f"config file: {self._config_file}"
                 self.logger.info(f"Credentials loaded from config file: {self._config_file}")
             
@@ -195,13 +205,15 @@ class ConfigManager:
                 self.logger.warning(f"Blink credentials incomplete (from {source})")
                 return None, False
             
-            if not self.credentials.voipms.username or not self.credentials.voipms.password:
-                self.logger.warning(f"VoIP.ms credentials incomplete (from {source})")
-                return None, False
-            
-            if not self.credentials.voipms.did:
-                self.logger.warning(f"VoIP.ms DID missing (from {source})")
-                return None, False
+            # VoIP.ms validation is optional
+            if self.credentials.voipms:
+                if not self.credentials.voipms.username or not self.credentials.voipms.password:
+                    self.logger.warning(f"VoIP.ms credentials incomplete (from {source})")
+                    return None, False
+                
+                if not self.credentials.voipms.did:
+                    self.logger.warning(f"VoIP.ms DID missing (from {source})")
+                    return None, False
             
             # Save env vars to config file for web UI editing
             if save_to_config:
@@ -280,6 +292,23 @@ class ConfigManager:
                 "voipms_username": self.config.voipms_username,
                 "voipms_password": self.config.voipms_password,
                 "voipms_did": self.config.voipms_did,
+                # Media download settings
+                "media_download_enabled": self.config.media_download_enabled,
+                "media_download_clips": self.config.media_download_clips,
+                "media_download_thumbnails": self.config.media_download_thumbnails,
+                "media_download_base_path": self.config.media_download_base_path,
+                "media_retention_type": self.config.media_retention_type,
+                "media_retention_count": self.config.media_retention_count,
+                "media_retention_days": self.config.media_retention_days,
+                "media_retention_size_gb": self.config.media_retention_size_gb,
+                "media_use_nas": self.config.media_use_nas,
+                "media_nas_type": self.config.media_nas_type,
+                "media_nas_host": self.config.media_nas_host,
+                "media_nas_share": self.config.media_nas_share,
+                "media_nas_username": self.config.media_nas_username,
+                "media_nas_password": self.config.media_nas_password,
+                "media_nas_mount_point": self.config.media_nas_mount_point,
+                "media_check_interval_minutes": self.config.media_check_interval_minutes,
             }
             
             # Add cached credentials if present
@@ -316,19 +345,29 @@ class ConfigManager:
         if not credentials.blink.username or not credentials.blink.password:
             raise ConfigurationError("Blink username and password are required")
         
-        if not credentials.voipms.username or not credentials.voipms.password:
-            raise ConfigurationError("VoIP.ms username and password are required")
-        
-        if not credentials.voipms.did:
-            raise ConfigurationError("VoIP.ms DID is required")
+        # VoIP.ms credentials are optional (only required for automated 2FA)
+        if credentials.voipms:
+            if not credentials.voipms.username or not credentials.voipms.password:
+                raise ConfigurationError("VoIP.ms username and password are required when using automated 2FA")
+            
+            if not credentials.voipms.did:
+                raise ConfigurationError("VoIP.ms DID is required when using automated 2FA")
         
         # Update config with credentials
         if self.config:
             self.config.blink_username = credentials.blink.username
             self.config.blink_password = credentials.blink.password
-            self.config.voipms_username = credentials.voipms.username
-            self.config.voipms_password = credentials.voipms.password
-            self.config.voipms_did = credentials.voipms.did
+            
+            # Only update VoIP.ms config if credentials provided
+            if credentials.voipms:
+                self.config.voipms_username = credentials.voipms.username
+                self.config.voipms_password = credentials.voipms.password
+                self.config.voipms_did = credentials.voipms.did
+            else:
+                # Clear VoIP.ms config if not provided
+                self.config.voipms_username = None
+                self.config.voipms_password = None
+                self.config.voipms_did = None
         
         # Save credentials to config file
         self.save_config()

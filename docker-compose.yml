@@ -4,7 +4,8 @@ services:
     container_name: myblink
     volumes:
       # Persistent volume for config and credentials
-      - myblink-data:/data
+      # - myblink-data:/data
+      - ./data:/data
     ports:
       # Web interface port (required for setup and management)
       - "8080:8080"
@@ -34,9 +35,9 @@ services:
       # - VOIPMS_PASSWORD=your-voipms-api-password
       # - VOIPMS_DID=5551234567
 
-volumes:
-  myblink-data:
-    driver: local
+# volumes:
+#   myblink-data:
+#     driver: local
 
 # Credential Configuration Options (checked in this order):
 # 1. Environment variables (BLINK_USERNAME, BLINK_PASSWORD, etc.) - saved to config if found

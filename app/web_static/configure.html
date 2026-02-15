@@ -294,6 +294,63 @@
             margin-bottom: 6px;
         }
         
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .radio-option {
+            display: flex;
+            align-items: flex-start;
+            padding: 16px;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: var(--surface);
+        }
+        
+        .radio-option:hover {
+            border-color: var(--primary);
+            background: var(--surface-alt);
+        }
+        
+        .radio-option input[type="radio"] {
+            width: 20px;
+            height: 20px;
+            margin-right: 12px;
+            margin-top: 2px;
+            flex-shrink: 0;
+            cursor: pointer;
+        }
+        
+        .radio-option input[type="radio"]:checked {
+            accent-color: var(--primary);
+        }
+        
+        .radio-content {
+            flex: 1;
+        }
+        
+        .radio-title {
+            color: var(--text);
+            font-weight: 600;
+            font-size: 15px;
+            margin-bottom: 4px;
+        }
+        
+        .radio-description {
+            color: var(--text-secondary);
+            font-size: 13px;
+            line-height: 1.4;
+        }
+        
+        #twofaSection {
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+        }
+        
         @media (max-width: 640px) {
             .config-container {
                 padding: 30px 20px;
@@ -361,13 +418,54 @@
                 </div>
             </div>
             
-            <!-- VoIP.ms Section -->
+            <!-- 2FA Method Selection -->
             <div class="section">
+                <div class="section-header">
+                    <div class="section-icon">🔐</div>
+                    <div class="section-title">
+                        <h2>Two-Factor Authentication Method</h2>
+                        <p>Choose how you'll provide your 2FA code</p>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label style="margin-bottom: 12px;">Authentication Method</label>
+                    <div class="radio-group">
+                        <label class="radio-option">
+                            <input 
+                                type="radio" 
+                                name="twofa_method" 
+                                value="interactive" 
+                                checked
+                            />
+                            <div class="radio-content">
+                                <div class="radio-title">Interactive 2FA</div>
+                                <div class="radio-description">Manually enter your 2FA code when prompted</div>
+                            </div>
+                        </label>
+                        
+                        <label class="radio-option">
+                            <input 
+                                type="radio" 
+                                name="twofa_method" 
+                                value="automated"
+                            />
+                            <div class="radio-content">
+                                <div class="radio-title">Automated 2FA</div>
+                                <div class="radio-description">Automatically retrieve code via VoIP.ms SMS</div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- VoIP.ms Section (shown only for automated 2FA) -->
+            <div class="section" id="voipmsSection" style="display: none;">
                 <div class="section-header">
                     <div class="section-icon">📞</div>
                     <div class="section-title">
                         <h2>VoIP.ms API Credentials</h2>
-                        <p>For SMS notifications</p>
+                        <p>For automated SMS retrieval</p>
                     </div>
                 </div>
                 
@@ -382,7 +480,6 @@
                         name="voipmsUsername" 
                         placeholder="user@example.com"
                         autocomplete="email"
-                        required
                     />
                     <div class="input-hint">Your VoIP.ms account email</div>
                 </div>
@@ -396,7 +493,6 @@
                         id="voipmsPassword" 
                         name="voipmsPassword" 
                         placeholder="••••••••"
-                        required
                     />
                     <div class="input-hint">API password from VoIP.ms portal (not your login password)</div>
                 </div>
@@ -411,24 +507,46 @@
                         name="voipmsDid" 
                         placeholder="5551234567"
                         pattern="[0-9]+"
-                        required
                     />
                     <div class="input-hint">Your VoIP.ms phone number (digits only, no spaces or dashes)</div>
                 </div>
             </div>
             
             <button type="submit" class="btn" id="submitBtn">
-                Save Configuration
+                Connect to Blink
             </button>
             
-            <button type="button" class="btn btn-secondary" id="testBtn">
-                Test Connection
-            </button>
+            <!-- 2FA Code Input (shown when needed) -->
+            <div id="twofaSection" style="display: none; margin-top: 20px;">
+                <div class="form-group">
+                    <label for="twofaCode">
+                        Enter 2FA Code
+                    </label>
+                    <input 
+                        type="text" 
+                        id="twofaCode" 
+                        name="twofaCode" 
+                        placeholder="123456"
+                        pattern="[0-9]{6}"
+                        maxlength="6"
+                        autocomplete="one-time-code"
+                    />
+                    <div class="input-hint">Enter the 6-digit code from your authenticator app or SMS</div>
+                </div>
+                
+                <button type="button" class="btn" id="verify2faBtn">
+                    Verify Code
+                </button>
+            </div>
         </form>
         
         <div class="info-note">
             <strong>🔒 Security Note</strong>
-            Your credentials are stored securely in the configuration file and never transmitted except to authenticate with Blink and VoIP.ms services. You can update these settings at any time from the web interface.
+            Your credentials are stored securely in the configuration file and never transmitted except to authenticate with Blink and VoIP.ms services.
+            <br><br>
+            <strong>📱 2FA Options:</strong><br>
+            • <strong>Interactive:</strong> Manually enter the 2FA code when prompted (recommended for most users)<br>
+            • <strong>Automated:</strong> Automatically retrieve 2FA codes via VoIP.ms SMS (requires VoIP.ms account)
         </div>
     </div>
 
@@ -438,7 +556,6 @@
         
         const form = document.getElementById('configForm');
         const submitBtn = document.getElementById('submitBtn');
-        const testBtn = document.getElementById('testBtn');
         const errorMessage = document.getElementById('errorMessage');
         const successMessage = document.getElementById('successMessage');
         
@@ -448,9 +565,35 @@
         const voipmsUsername = document.getElementById('voipmsUsername');
         const voipmsPassword = document.getElementById('voipmsPassword');
         const voipmsDid = document.getElementById('voipmsDid');
+        const twofaCode = document.getElementById('twofaCode');
+        
+        // Sections
+        const voipmsSection = document.getElementById('voipmsSection');
+        const twofaSection = document.getElementById('twofaSection');
+        const verify2faBtn = document.getElementById('verify2faBtn');
+        
+        // Radio buttons
+        const twofaMethodRadios = document.querySelectorAll('input[name="twofa_method"]');
+        
+        // Handle 2FA method changes
+        twofaMethodRadios.forEach(radio => {
+            radio.addEventListener('change', function() {
+                const isAutomated = this.value === 'automated';
+                voipmsSection.style.display = isAutomated ? 'block' : 'none';
+                
+                // Update required attribute on VoIP.ms fields
+                voipmsUsername.required = isAutomated;
+                voipmsPassword.required = isAutomated;
+                voipmsDid.required = isAutomated;
+                
+                // Clear any errors
+                errorMessage.classList.remove('show');
+                successMessage.classList.remove('show');
+            });
+        });
         
         // Clear messages on input
-        [blinkUsername, blinkPassword, voipmsUsername, voipmsPassword, voipmsDid].forEach(input => {
+        [blinkUsername, blinkPassword, voipmsUsername, voipmsPassword, voipmsDid, twofaCode].forEach(input => {
             input.addEventListener('input', function() {
                 errorMessage.classList.remove('show');
                 successMessage.classList.remove('show');
@@ -464,7 +607,7 @@
         }
         
         function showSuccess(message) {
-            successMessage.textContent = message;
+            successMessage.innerHTML = message;
             successMessage.classList.add('show');
             errorMessage.classList.remove('show');
         }
@@ -479,14 +622,27 @@
             button.textContent = text;
         }
         
+        function getTwofaMethod() {
+            const checkedRadio = document.querySelector('input[name="twofa_method"]:checked');
+            return checkedRadio ? checkedRadio.value : 'interactive';
+        }
+        
         function getFormData() {
-            return {
+            const twofaMethod = getTwofaMethod();
+            const data = {
                 blink_username: blinkUsername.value.trim(),
                 blink_password: blinkPassword.value,
-                voipms_username: voipmsUsername.value.trim(),
-                voipms_password: voipmsPassword.value,
-                voipms_did: voipmsDid.value.trim().replace(/[^0-9]/g, '')
+                twofa_method: twofaMethod
             };
+            
+            // Only include VoIP.ms data if automated method selected
+            if (twofaMethod === 'automated') {
+                data.voipms_username = voipmsUsername.value.trim();
+                data.voipms_password = voipmsPassword.value;
+                data.voipms_did = voipmsDid.value.trim().replace(/[^0-9]/g, '');
+            }
+            
+            return data;
         }
         
         function validateForm() {
@@ -504,64 +660,43 @@
                 return false;
             }
             
-            if (!data.voipms_username || !data.voipms_username.includes('@')) {
-                showError('Please enter a valid VoIP.ms email address');
-                voipmsUsername.focus();
-                return false;
-            }
-            
-            if (!data.voipms_password || data.voipms_password.length < 3) {
-                showError('Please enter your VoIP.ms API password');
-                voipmsPassword.focus();
-                return false;
-            }
-            
-            if (!data.voipms_did || data.voipms_did.length < 10) {
-                showError('Please enter a valid phone number (at least 10 digits)');
-                voipmsDid.focus();
-                return false;
+            // Validate VoIP.ms fields only if automated method selected
+            if (data.twofa_method === 'automated') {
+                if (!data.voipms_username || !data.voipms_username.includes('@')) {
+                    showError('Please enter a valid VoIP.ms email address');
+                    voipmsUsername.focus();
+                    return false;
+                }
+                
+                if (!data.voipms_password || data.voipms_password.length < 3) {
+                    showError('Please enter your VoIP.ms API password');
+                    voipmsPassword.focus();
+                    return false;
+                }
+                
+                if (!data.voipms_did || data.voipms_did.length < 10) {
+                    showError('Please enter a valid phone number (at least 10 digits)');
+                    voipmsDid.focus();
+                    return false;
+                }
             }
             
             return true;
         }
         
-        // Test connection
-        testBtn.addEventListener('click', async function() {
-            if (!validateForm()) return;
-            
-            showLoading(testBtn, 'Testing connection...');
-            
-            try {
-                const response = await fetch('/api/config/test', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(getFormData())
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    showSuccess(`✅ Connection successful! ${data.message || ''}`);
-                } else {
-                    showError(data.error || 'Connection test failed');
-                }
-            } catch (error) {
-                console.error('Test error:', error);
-                showError('Network error. Please ensure the server is running.');
-            } finally {
-                hideLoading(testBtn, 'Test Connection');
-            }
-        });
-        
-        // Submit form
+        // Submit form - initiate Blink connection
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
             
             if (!validateForm()) return;
             
-            showLoading(submitBtn, 'Saving and connecting to Blink...');
+            const twofaMethod = getTwofaMethod();
+            
+            if (twofaMethod === 'interactive') {
+                showLoading(submitBtn, 'Connecting to Blink...');
+            } else {
+                showLoading(submitBtn, 'Saving and connecting to Blink...');
+            }
             
             try {
                 const response = await fetch('/api/config/save', {
@@ -575,20 +710,83 @@
                 const data = await response.json();
                 
                 if (response.ok) {
-                    showSuccess('✅ Configuration saved and Blink initialized! Redirecting...');
-                    
-                    // Redirect after a short delay
-                    setTimeout(() => {
-                        window.location.href = '/';
-                    }, 2000);
+                    if (data.requires_2fa && twofaMethod === 'interactive') {
+                        // Show 2FA input section
+                        showSuccess('✅ Connected! Please enter your 2FA code.');
+                        twofaSection.style.display = 'block';
+                        submitBtn.style.display = 'none';
+                        hideLoading(submitBtn, 'Connect to Blink');
+                        twofaCode.focus();
+                    } else {
+                        // Success - configuration complete
+                        if (data.warning) {
+                            showSuccess(`✅ ${data.message || 'Configuration saved!'}<br><small style="color: #fbbf24;">⚠️ ${data.warning}</small>`);
+                            setTimeout(() => {
+                                window.location.href = '/';
+                            }, 4000);
+                        } else {
+                            showSuccess(`✅ ${data.message || 'Configuration saved and Blink initialized! Redirecting...'}`);
+                            setTimeout(() => {
+                                window.location.href = '/';
+                            }, 2000);
+                        }
+                    }
                 } else {
                     showError(data.error || 'Failed to save configuration');
-                    hideLoading(submitBtn, 'Save Configuration');
+                    hideLoading(submitBtn, 'Connect to Blink');
                 }
             } catch (error) {
                 console.error('Save error:', error);
                 showError('Network error. Please ensure the server is running.');
-                hideLoading(submitBtn, 'Save Configuration');
+                hideLoading(submitBtn, 'Connect to Blink');
+            }
+        });
+        
+        // Verify 2FA code (interactive mode)
+        verify2faBtn.addEventListener('click', async function() {
+            const code = twofaCode.value.trim();
+            
+            if (!code || code.length !== 6 || !/^\d+$/.test(code)) {
+                showError('Please enter a valid 6-digit code');
+                twofaCode.focus();
+                return;
+            }
+            
+            showLoading(verify2faBtn, 'Verifying...');
+            
+            try {
+                const response = await fetch('/api/config/verify-2fa', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ code: code })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showSuccess(`✅ ${data.message || 'Authentication successful! Redirecting...'}`);
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 2000);
+                } else {
+                    showError(data.error || '2FA verification failed');
+                    hideLoading(verify2faBtn, 'Verify Code');
+                    twofaCode.value = '';
+                    twofaCode.focus();
+                }
+            } catch (error) {
+                console.error('2FA verification error:', error);
+                showError('Network error. Please ensure the server is running.');
+                hideLoading(verify2faBtn, 'Verify Code');
+            }
+        });
+        
+        // Allow Enter key on 2FA code input
+        twofaCode.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                verify2faBtn.click();
             }
         });
         

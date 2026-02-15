@@ -63,7 +63,7 @@ class Credentials:
     """Application credentials."""
     
     blink: BlinkCredentials
-    voipms: VoipMsCredentials
+    voipms: Optional[VoipMsCredentials] = None
     
     @classmethod
     def from_dict(cls, creds_dict: Dict[str, Any]) -> 'Credentials':
@@ -86,11 +86,14 @@ class Credentials:
                 cached_credentials=creds_dict["blink"].get("cached_credentials")
             )
             
-            voipms_creds = VoipMsCredentials(
-                username=creds_dict["voipms"]["username"],
-                password=creds_dict["voipms"]["password"],
-                did=creds_dict["voipms"]["did"]
-            )
+            # VoIP.ms credentials are optional (for interactive 2FA mode)
+            voipms_creds = None
+            if "voipms" in creds_dict:
+                voipms_creds = VoipMsCredentials(
+                    username=creds_dict["voipms"]["username"],
+                    password=creds_dict["voipms"]["password"],
+                    did=creds_dict["voipms"]["did"]
+                )
             
             return cls(blink=blink_creds, voipms=voipms_creds)
         except KeyError as e:
@@ -98,18 +101,23 @@ class Credentials:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert Credentials to dictionary format."""
-        return {
+        result = {
             "blink": {
                 "username": self.blink.username,
                 "password": self.blink.password,
                 "cached_credentials": self.blink.cached_credentials
-            },
-            "voipms": {
+            }
+        }
+        
+        # Only include voipms if it exists
+        if self.voipms:
+            result["voipms"] = {
                 "username": self.voipms.username,
                 "password": self.voipms.password,
                 "did": self.voipms.did
             }
-        }
+        
+        return result
 
 
 @dataclass
@@ -161,6 +169,7 @@ class AppConfig:
     web_port: int = 8080
     web_host: str = "0.0.0.0"
     web_theme: str = "dark"  # UI theme: 'light' or 'dark'
+    web_time_format: str = "12h"  # Time format: '12h' or '24h'
     
     # Authentication settings
     auth_enabled: bool = False
@@ -178,6 +187,24 @@ class AppConfig:
     # Credentials (stored in config for easy web UI editing)
     blink_username: str = ""
     blink_password: str = ""
+    
+    # Media download settings (configurable via web UI)
+    media_download_enabled: bool = False
+    media_download_clips: bool = True
+    media_download_thumbnails: bool = True
+    media_download_base_path: str = "/app/media"
+    media_retention_type: str = "count"  # "count", "days", or "size"
+    media_retention_count: int = 100
+    media_retention_days: int = 30
+    media_retention_size_gb: float = 10.0
+    media_use_nas: bool = False
+    media_nas_type: str = "smb"  # "smb" or "nfs"
+    media_nas_host: str = ""
+    media_nas_share: str = ""
+    media_nas_username: str = ""
+    media_nas_password: str = ""
+    media_nas_mount_point: str = "/mnt/nas"
+    media_check_interval_minutes: int = 5
     blink_cached_credentials: Optional[str] = None
     voipms_username: str = ""
     voipms_password: str = ""
@@ -227,6 +254,7 @@ class AppConfig:
             web_port=config_dict.get("web_port", 8080),
             web_host=config_dict.get("web_host", "0.0.0.0"),
             web_theme=config_dict.get("web_theme", "dark"),
+            web_time_format=config_dict.get("web_time_format", "12h"),
             auth_enabled=config_dict.get("auth_enabled", False),
             auth_method=config_dict.get("auth_method", "basic"),
             auth_session_timeout=config_dict.get("auth_session_timeout", 480),
@@ -244,6 +272,22 @@ class AppConfig:
             voipms_username=config_dict.get("voipms_username", ""),
             voipms_password=config_dict.get("voipms_password", ""),
             voipms_did=config_dict.get("voipms_did", ""),
+            media_download_enabled=config_dict.get("media_download_enabled", False),
+            media_download_clips=config_dict.get("media_download_clips", True),
+            media_download_thumbnails=config_dict.get("media_download_thumbnails", True),
+            media_download_base_path=config_dict.get("media_download_base_path", "/app/media"),
+            media_retention_type=config_dict.get("media_retention_type", "count"),
+            media_retention_count=config_dict.get("media_retention_count", 100),
+            media_retention_days=config_dict.get("media_retention_days", 30),
+            media_retention_size_gb=config_dict.get("media_retention_size_gb", 10.0),
+            media_use_nas=config_dict.get("media_use_nas", False),
+            media_nas_type=config_dict.get("media_nas_type", "smb"),
+            media_nas_host=config_dict.get("media_nas_host", ""),
+            media_nas_share=config_dict.get("media_nas_share", ""),
+            media_nas_username=config_dict.get("media_nas_username", ""),
+            media_nas_password=config_dict.get("media_nas_password", ""),
+            media_nas_mount_point=config_dict.get("media_nas_mount_point", "/mnt/nas"),
+            media_check_interval_minutes=config_dict.get("media_check_interval_minutes", 15),
         )
         
         # Validate exclusive pairs
@@ -308,3 +352,29 @@ class AppConfig:
             }
         
         return auth_dict
+    
+    def get_media_config(self) -> Dict[str, Any]:
+        """
+        Convert media download settings to dictionary.
+        
+        Returns:
+            Dictionary for MediaDownloadConfig
+        """
+        return {
+            "enabled": self.media_download_enabled,
+            "download_clips": self.media_download_clips,
+            "download_thumbnails": self.media_download_thumbnails,
+            "base_path": self.media_download_base_path,
+            "retention_type": self.media_retention_type,
+            "retention_count": self.media_retention_count,
+            "retention_days": self.media_retention_days,
+            "retention_size_gb": self.media_retention_size_gb,
+            "use_nas": self.media_use_nas,
+            "nas_type": self.media_nas_type,
+            "nas_host": self.media_nas_host,
+            "nas_share": self.media_nas_share,
+            "nas_username": self.media_nas_username,
+            "nas_password": self.media_nas_password,
+            "nas_mount_point": self.media_nas_mount_point,
+            "check_interval_minutes": self.media_check_interval_minutes,
+        }
