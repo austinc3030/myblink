@@ -1321,16 +1321,9 @@ class WebServer:
                 self.myblink_app.credentials = None
                 self.myblink_app._configured = False
                 
-                # 11. Cleanup Blink handler
+                # 11. Cleanup Blink handler (don't close session explicitly - let it be destroyed)
+                # The session will be cleaned up when the handler is destroyed
                 if self.myblink_app.blink_handler:
-                    if self.myblink_app._event_loop:
-                        try:
-                            asyncio.run_coroutine_threadsafe(
-                                self.myblink_app.blink_handler.cleanup_session(),
-                                self.myblink_app._event_loop
-                            ).result(timeout=5)
-                        except:
-                            pass
                     self.myblink_app.blink_handler = None
                 
                 self.logger.warning("System reset complete")

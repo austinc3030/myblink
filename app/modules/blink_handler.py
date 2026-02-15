@@ -301,15 +301,30 @@ class BlinkHandler:
         Reinitialize Blink connection after an error.
         
         This completely resets the Blink connection and re-authenticates.
+        Note: We don't close the old session explicitly to avoid 'Session is closed'
+        errors if operations are still in progress. The old session will be garbage
+        collected once all references are released.
         """
         self.logger.warning("Reinitializing Blink connection")
         
-        # Cleanup existing resources
-        await self.cleanup_session()
+        # Clear existing Blink instance
         self.blink = None
         
-        # Reinitialize
+        # Mark session for replacement (don't close it - let it be cleaned up naturally)
+        # This ensures initialize() creates a fresh session
+        old_session = self._session
+        self._session = None
+        
+        # Reinitialize with fresh session
         await self.initialize()
+        
+        # Close old session after new one is established
+        if old_session and not old_session.closed:
+            try:
+                await old_session.close()
+                self.logger.debug("Closed old session after reinitialize")
+            except Exception as e:
+                self.logger.debug(f"Failed to close old session (already closed or in use): {e}")
     
     async def _execute_with_retry(
         self,
