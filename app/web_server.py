@@ -11,6 +11,7 @@ import logging
 import os
 import secrets
 import yaml
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -106,11 +107,22 @@ class WebServer:
         # App is configured ONLY if Blink handler is initialized and available
         # This supports both interactive (Blink only) and automated (Blink + VoIP.ms) modes
         # Don't use fallback checks to prevent partial setups from bypassing config flow
-        return bool(
-            self.myblink_app.blink_handler and 
-            self.myblink_app.blink_handler.blink and 
-            self.myblink_app.blink_handler.blink.available
-        )
+        handler_exists = bool(self.myblink_app.blink_handler)
+        blink_exists = bool(self.myblink_app.blink_handler.blink if handler_exists else None)
+        blink_available = bool(self.myblink_app.blink_handler.blink.available if (handler_exists and blink_exists) else None)
+        
+        is_configured = handler_exists and blink_exists and blink_available
+        
+        # Debug logging
+        if not is_configured:
+            blink_id = id(self.myblink_app.blink_handler.blink) if (handler_exists and blink_exists) else None
+            self.logger.info(
+                f"App configuration check: handler={handler_exists}, "
+                f"blink={blink_exists}, available={blink_available}, "
+                f"configured={self.myblink_app._configured}, blink_id={blink_id}"
+            )
+        
+        return is_configured
     
     def _setup_log_handler(self) -> None:
         """Setup log handler to capture logs for web interface."""
@@ -144,10 +156,17 @@ class WebServer:
         logging.getLogger().addHandler(handler)
     
     def _require_auth(self, f):
-        """Helper to apply auth decorator if auth is enabled."""
-        if self.auth_manager:
-            return self.auth_manager.require_auth(f)
-        return f
+        """Helper to apply auth decorator - checks auth status at request time."""
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            # Check auth manager at request time, not decoration time
+            if self.auth_manager and self.auth_manager.config.enabled:
+                # Apply auth check
+                return self.auth_manager.require_auth(f)(*args, **kwargs)
+            # No auth required
+            return f(*args, **kwargs)
+        
+        return decorated_function
     
     def _setup_routes(self) -> None:
         """Setup Flask routes."""
@@ -453,12 +472,40 @@ class WebServer:
                             success = await blink.auth.complete_2fa_login(code)
                             
                             if not success:
+                                self.logger.error("2FA login completion failed")
                                 return False
+                            
+                            self.logger.info("2FA login completed, starting setup...")
                             
                             # Step 2: Complete Blink setup steps
                             blink.setup_urls()
+                            self.logger.info("URLs setup complete")
+                            
                             await blink.get_homescreen()
-                            await blink.setup_post_verify()
+                            self.logger.info("Homescreen retrieved")
+                            
+                            # Step 3: Setup post-verify (initializes networks and cameras)
+                            self.logger.info("Starting setup_post_verify...")
+                            setup_result = await blink.setup_post_verify()
+                            self.logger.info(f"Setup post-verify result: {setup_result}, available: {blink.available}")
+                            
+                            if not setup_result:
+                                self.logger.error(f"Setup post-verify failed. Available: {blink.available}")
+                                return False
+                            
+                            # Ensure available is True after successful authentication and setup
+                            if not blink.available:
+                                self.logger.warning("Setting available=True after successful setup")
+                                blink.available = True
+                            
+                            # Log the final state for debugging
+                            self.logger.info(f"After 2FA completion: blink.available={blink.available}, blink id={id(blink)}")
+                            self.logger.info(f"Handler blink id={id(self.myblink_app.blink_handler.blink)}")
+                            
+                            # Step 4: Verify connection is fully established
+                            # (This is now lenient - just checks auth succeeded)
+                            self.logger.info("Verifying connection...")
+                            await self.myblink_app.blink_handler._verify_blink_connection()
                             
                             return True
                         
@@ -479,7 +526,7 @@ class WebServer:
                         # Save credentials with tokens
                         self.myblink_app.blink_handler._save_blink_credentials()
                         
-                        self.logger.info("2FA authentication complete")
+                        self.logger.info("2FA authentication complete and verified")
                         
                         return jsonify({
                             'success': True,

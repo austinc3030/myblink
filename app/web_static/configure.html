@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <meta name="theme-color" content="#71717a">
     <title>MyBlink - Configuration</title>
     <style>
@@ -712,11 +715,13 @@
                 if (response.ok) {
                     if (data.requires_2fa && twofaMethod === 'interactive') {
                         // Show 2FA input section
+                        console.log('Showing 2FA section');
                         showSuccess('✅ Connected! Please enter your 2FA code.');
                         twofaSection.style.display = 'block';
                         submitBtn.style.display = 'none';
                         hideLoading(submitBtn, 'Connect to Blink');
                         twofaCode.focus();
+                        console.log('2FA section visible, button attached:', verify2faBtn);
                     } else {
                         // Success - configuration complete
                         if (data.warning) {
@@ -744,7 +749,9 @@
         
         // Verify 2FA code (interactive mode)
         verify2faBtn.addEventListener('click', async function() {
+            console.log('2FA Verify button clicked');
             const code = twofaCode.value.trim();
+            console.log('2FA code:', code);
             
             if (!code || code.length !== 6 || !/^\d+$/.test(code)) {
                 showError('Please enter a valid 6-digit code');
@@ -752,6 +759,7 @@
                 return;
             }
             
+            console.log('Sending 2FA verification request...');
             showLoading(verify2faBtn, 'Verifying...');
             
             try {
@@ -762,8 +770,10 @@
                     },
                     body: JSON.stringify({ code: code })
                 });
+                console.log('2FA verification response status:', response.status);
                 
                 const data = await response.json();
+                console.log('2FA verification response data:', data);
                 
                 if (response.ok) {
                     showSuccess(`✅ ${data.message || 'Authentication successful! Redirecting...'}`);

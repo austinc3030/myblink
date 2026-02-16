@@ -287,13 +287,26 @@ class MyBlink:
                 # Run jobs immediately on startup
                 await self.blink_handler.run_scheduled_jobs()
             except Exception as e:
-                self.logger.error(f"Startup initialization failed: {e}", exc_info=True)
-                if self.health_monitor:
-                    self.health_monitor.update_status(
-                        HealthStatus.UNHEALTHY,
-                        "Startup initialization failed",
-                        e
-                    )
+                # Import exception types
+                from modules.exceptions import TwoFactorAuthenticationError
+                
+                # For interactive 2FA mode, this is expected - user needs to provide code via web UI
+                if isinstance(e, TwoFactorAuthenticationError):
+                    self.logger.info("Interactive 2FA required - waiting for user to complete authentication via web interface")
+                    if self.health_monitor:
+                        self.health_monitor.update_status(
+                            HealthStatus.DEGRADED,
+                            "Waiting for 2FA authentication via web interface"
+                        )
+                else:
+                    # Other errors are actual problems
+                    self.logger.error(f"Startup initialization failed: {e}", exc_info=True)
+                    if self.health_monitor:
+                        self.health_monitor.update_status(
+                            HealthStatus.UNHEALTHY,
+                            "Startup initialization failed",
+                            e
+                        )
         
         # Calculate next run time (every hour on the hour)
         now = time.time()

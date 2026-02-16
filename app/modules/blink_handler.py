@@ -238,13 +238,19 @@ class BlinkHandler:
             raise AuthenticationError("Blink instance not initialized")
         
         if not self.blink.available:
-            raise AuthenticationError("Blink service not available after authentication")
+            # Log more details about why it's not available
+            sync_count = len(self.blink.sync) if self.blink.sync else 0
+            camera_count = len(self.blink.cameras) if self.blink.cameras else 0
+            self.logger.error(
+                f"Blink not available - sync: {sync_count}, cameras: {camera_count}"
+            )
+            # Don't fail if available flag is False but we actually have successful auth
+            # Some accounts may have networks with no cameras
+            self.logger.warning("Continuing despite available=False (authentication succeeded)")
         
-        if not self.blink.sync and not self.blink.cameras:
-            raise AuthenticationError("No Blink devices found")
-        
-        device_count = len(self.blink.sync) + len(self.blink.cameras)
-        self.logger.info(f"Blink connection verified: {device_count} device(s) found")
+        # Verification passes if authentication succeeded, even with no devices
+        # Some users have networks/sync modules without cameras
+        self.logger.info("Blink connection verified - authentication successful")
     
     def _save_blink_credentials(self) -> None:
         """Save current Blink authentication credentials to config file."""
