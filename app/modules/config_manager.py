@@ -274,6 +274,7 @@ class ConfigManager:
                 "web_port": self.config.web_port,
                 "web_host": self.config.web_host,
                 "web_theme": self.config.web_theme,
+                "web_time_format": self.config.web_time_format,
                 # Authentication settings
                 "auth_enabled": self.config.auth_enabled,
                 "auth_method": self.config.auth_method,

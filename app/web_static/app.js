@@ -11,6 +11,9 @@ class MyBlinkApp {
         this.blinkLogs = [];
         this.thumbnailCache = new Map(); // In-memory cache
         
+        // Tutorial mode
+        this.tutorialMode = this.loadTutorialMode();
+        
         // UI state will be loaded async in init
         this.uiState = {
             collapsedSyncs: {},
@@ -19,6 +22,37 @@ class MyBlinkApp {
         };
         
         this.init();
+    }
+    
+    loadTutorialMode() {
+        try {
+            const saved = localStorage.getItem('myblink_tutorial_mode');
+            return saved === null ? true : saved === 'true'; // Default to true for first-time users
+        } catch (e) {
+            return true;
+        }
+    }
+    
+    saveTutorialMode(enabled) {
+        try {
+            localStorage.setItem('myblink_tutorial_mode', enabled.toString());
+            this.tutorialMode = enabled;
+        } catch (e) {
+            console.warn('Failed to save tutorial mode:', e);
+        }
+    }
+    
+    toggleTutorialMode() {
+        this.saveTutorialMode(!this.tutorialMode);
+        this.showMessage(`Tutorial mode ${this.tutorialMode ? 'enabled' : 'disabled'}`, 'success');
+        // Re-render current page to show/hide tutorial tooltips
+        if (this.currentPage === 'main') {
+            this.renderMainPage();
+        } else if (this.currentPage === 'settings') {
+            this.renderSettingsPage();
+        } else if (this.currentPage === 'schedules') {
+            this.renderSchedulesPage();
+        }
     }
     
     async loadUIState() {
@@ -87,7 +121,7 @@ class MyBlinkApp {
             const status = await response.json();
             
             if (!status.configured) {
-                this.showMessage('⚠️ Please configure credentials first. Check server logs for setup instructions.', 'error');
+                this.showMessage('Please configure credentials first. Check server logs for setup instructions.', 'error');
                 return;
             }
             
@@ -159,6 +193,44 @@ class MyBlinkApp {
         }
     }
     
+    async refreshData() {
+        const refreshBtn = document.getElementById('refreshBtn');
+        if (!refreshBtn) return;
+        
+        // Disable button and add spinning animation
+        refreshBtn.disabled = true;
+        refreshBtn.classList.add('refreshing');
+        
+        try {
+            this.showMessage('Refreshing data from Blink servers...', 'info');
+            
+            // Call the refresh endpoint
+            const response = await fetch('/api/refresh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Refresh failed');
+            }
+            
+            const result = await response.json();
+            this.showMessage(result.message || 'Refresh completed successfully', 'success');
+            
+            // Reload data after refresh
+            await this.loadData();
+            
+        } catch (error) {
+            console.error('Failed to refresh:', error);
+            this.showMessage('Failed to refresh: ' + error.message, 'error');
+        } finally {
+            // Re-enable button and remove spinning animation
+            refreshBtn.disabled = false;
+            refreshBtn.classList.remove('refreshing');
+        }
+    }
+    
     // Page navigation
     toggleMenu() {
         const menu = document.getElementById('dropdownMenu');
@@ -206,6 +278,8 @@ class MyBlinkApp {
         } else if (pageName === 'logs') {
             this.renderLogsPage();
             this.startLogPolling();
+        } else if (pageName === 'schedules') {
+            this.renderSchedulesPage();
         }
     }
     
@@ -323,18 +397,22 @@ class MyBlinkApp {
         }
     }
     
-    renderSyncModule(sync) {
+    renderSyncModule(sync) {        
         return `
-            <div class="sync-card" data-sync-name="${this.escapeHtml(sync.name)}" draggable="true">
-                <div class="sync-header">
+            <div class="sync-card" data-sync-name="${this.escapeHtml(sync.name)}" draggable="true" title="Sync Module: ${this.escapeHtml(sync.name)}">
+                <div class="sync-header" onclick="app.toggleSyncCollapse('${this.escapeHtml(sync.name)}')" style="cursor: pointer;" title="Click to expand/collapse cameras">
                     <div class="sync-header-left">
-                        <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
-                        <span class="sync-chevron" onclick="app.toggleSyncCollapse('${this.escapeHtml(sync.name)}')" style="cursor: pointer;">▼</span>
-                        <div class="sync-name" onclick="app.toggleSyncCollapse('${this.escapeHtml(sync.name)}')" style="cursor: pointer;">${sync.name}</div>
+                        <span class="drag-handle" onclick="event.stopPropagation();" title="Drag to reorder sync modules">⋮⋮</span>
+                        <span class="sync-chevron" title="Expand/Collapse">▼</span>
+                        <div class="sync-name">
+                            ${sync.name}
+                        </div>
                     </div>
-                    <button class="btn-icon btn-secondary" onclick="app.showSyncModal('${this.escapeHtml(sync.name)}');" title="Settings">
-                        ⚙️
-                    </button>
+                    <div style="display: flex; gap: 0.75rem; align-items: center;">
+                        <button class="btn-icon btn-secondary" onclick="event.stopPropagation(); app.showSyncModal('${this.escapeHtml(sync.name)}');" title="Sync module settings and controls">
+                            <svg class="icon"><use href="#icon-settings"/></svg>
+                        </button>
+                    </div>
                 </div>
                 
                 <div class="cameras-container">
@@ -357,16 +435,20 @@ class MyBlinkApp {
         if (cachedThumbnail) {
             thumbnailHtml = `<img src="${cachedThumbnail}" alt="${cameraNameEscaped}">`;
         } else {
-            thumbnailHtml = '<div class="no-thumbnail">📷</div>';
+            thumbnailHtml = '<div class="no-thumbnail"><svg class="icon-xl"><use href="#icon-camera"/></svg></div>';
         }
         
         return `
-            <div class="camera-card" data-camera-name="${cameraNameEscaped}" draggable="true" onclick="app.showCameraModal('${cameraNameEscaped}', '${syncNameEscaped}')">
+            <div class="camera-card" data-camera-name="${cameraNameEscaped}" draggable="true" onclick="app.showCameraModal('${cameraNameEscaped}', '${syncNameEscaped}')" title="Camera: ${this.escapeHtml(camera.name)} - Click for details and controls">
                 <div class="camera-header">
-                    <span class="drag-handle-small" title="Drag to reorder" onclick="event.stopPropagation()">⋮⋮</span>
-                    <div class="camera-name" style="flex: 1;">${camera.name}</div>
+                    <span class="drag-handle-small" title="Drag to reorder cameras within this sync module" onclick="event.stopPropagation()">⋮⋮</span>
+                    <div class="camera-name" style="flex: 1;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                            <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${camera.name}</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="camera-thumbnail" data-camera="${cameraNameEscaped}">
+                <div class="camera-thumbnail" data-camera="${cameraNameEscaped}" title="Last captured thumbnail">
                     ${thumbnailHtml}
                 </div>
             </div>
@@ -485,7 +567,7 @@ class MyBlinkApp {
         
         const noCamerasNotice = (!this.state.syncs || this.state.syncs.length === 0) ? `
             <div class="settings-section" style="background: rgba(37, 99, 235, 0.1); border-left: 4px solid var(--primary);">
-                <div class="settings-title">📷 Cameras</div>
+                <div class="settings-title"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-camera"/></svg>Cameras</div>
                 <p style="color: var(--text-secondary); margin-bottom: 1rem;">
                     No cameras detected yet. If you just configured your credentials, it may take a moment to connect to Blink.
                 </p>
@@ -494,14 +576,14 @@ class MyBlinkApp {
         
         container.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-                <h2 style="font-size: 1.5rem; font-weight: 600;">⚙️ Settings</h2>
+                <h2 style="font-size: 1.5rem; font-weight: 600;"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-settings"/></svg>Settings</h2>
                 <button class="btn btn-secondary" onclick="app.showPage('main')">← Back to Home</button>
             </div>
             
             ${noCamerasNotice}
             
             <div class="settings-section">
-                <div class="settings-title">🎨 Appearance</div>
+                <div class="settings-title"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-theme"/></svg>Appearance</div>
                 <div class="settings-grid">
                     <div class="form-group">
                         <label class="form-label">Theme</label>
@@ -518,34 +600,13 @@ class MyBlinkApp {
                         </select>
                     </div>
                 </div>
-            </div>
-            
-            <div class="settings-section">
-                <div class="settings-title">⚙️ Application Settings</div>
-                <div class="settings-grid">
-                    <div class="form-group">
-                        <label class="form-label">Schedule Interval (hours)</label>
-                        <input type="number" id="scheduleInterval" class="form-input" 
-                               value="${this.config.schedule_interval_hours || 1}" min="1" max="24">
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Blink Retry Limit</label>
-                        <input type="number" id="retryLimit" class="form-input" 
-                               value="${this.config.blink_retry_limit || 3}" min="1" max="10">
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">SMS Wait Time (seconds)</label>
-                        <input type="number" id="smsWait" class="form-input" 
-                               value="${this.config.voipms_sms_wait || 30}" min="10" max="120">
-                    </div>
-                </div>
                 <div style="margin-top: 1rem;">
-                    <button class="btn" id="saveSettingsBtn">Save Settings</button>
+                    <button class="btn" id="saveAppearanceBtn" title="Save theme and time format preferences">Save Appearance</button>
                 </div>
             </div>
             
             <div class="settings-section">
-                <div class="settings-title">🔐 Credentials</div>
+                <div class="settings-title"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-lock"/></svg>Credentials</div>
                 <div class="settings-grid">
                     <div class="form-group">
                         <label class="form-label">Blink Username</label>
@@ -574,7 +635,37 @@ class MyBlinkApp {
                     </div>
                 </div>
                 <div style="margin-top: 1rem;">
-                    <button class="btn" id="saveCredentialsBtn">Update Credentials</button>
+                    <button class="btn" id="saveCredentialsBtn" title="Update Blink and VoIP.ms credentials">Update Credentials</button>
+                </div>
+            </div>
+            
+            <div class="settings-section">
+                <div class="settings-title"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-settings"/></svg>System Parameters</div>
+                <div class="settings-grid">
+                    <div class="form-group">
+                        <label class="form-label" title="How often the system refreshes data from Blink servers">Refresh Interval (Minutes)</label>
+                        <input type="number" id="refreshInterval" class="form-input" 
+                               value="${Math.floor((this.config.refresh_interval || 300) / 60)}" min="1" max="60" 
+                               title="Minutes between automatic data refreshes (1-60)">
+                        <small style="color: var(--text-secondary);">How often to fetch updates from Blink (default: 5 minutes)</small>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" title="Default duration for temporary arm/snooze actions">Default Action Duration (Hours)</label>
+                        <input type="number" id="defaultDuration" class="form-input" 
+                               value="${this.config.default_duration_hours || 2}" min="0.5" max="24" step="0.5" 
+                               title="Default hours for arm/snooze duration (0.5-24)">
+                        <small style="color: var(--text-secondary);">Default hours for temporary arm/snooze (default: 2 hours)</small>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" title="Maximum number of retries for failed API calls">API Retry Limit</label>
+                        <input type="number" id="retryLimit" class="form-input" 
+                               value="${this.config.blink_retry_limit || 3}" min="1" max="10" 
+                               title="Maximum API retry attempts (1-10)">
+                        <small style="color: var(--text-secondary);">How many times to retry failed operations (default: 3)</small>
+                    </div>
+                </div>
+                <div style="margin-top: 1rem;">
+                    <button class="btn" id="saveSystemParamsBtn" title="Save system parameters">Save Parameters</button>
                 </div>
             </div>
             
@@ -586,29 +677,68 @@ class MyBlinkApp {
             </div>
             
             <div class="settings-section">
-                <div class="settings-title">🔧 Actions</div>
+                <div class="settings-title">📡 BlinkBridge RTSP Streaming</div>
+                <div id="blinkBridgeSettings">
+                    <p style="color: var(--text-secondary); margin-bottom: 1rem;">Loading BlinkBridge settings...</p>
+                </div>
+            </div>
+            
+            <div class="settings-section">
+                <div class="settings-title"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-tools"/></svg>Actions</div>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    <button class="btn" onclick="app.refresh()">🔄 Refresh State</button>
-                    <button class="btn btn-secondary" onclick="app.runJobs()">▶️ Run Jobs</button>
-                    <button class="btn btn-secondary" onclick="app.showPage('logs')">📋 View Logs</button>
+                    <button class="btn" onclick="app.refresh()" title="Reload camera state from server"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-refresh"/></svg>Refresh State</button>
+                    <button class="btn btn-secondary" onclick="app.runJobs()" title="Manually trigger scheduled jobs (thumbnails, arm/snooze, etc)">Run Jobs</button>
+                    <button class="btn btn-secondary" onclick="app.showPage('logs')" title="View system logs"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-clipboard"/></svg>View Logs</button>
                 </div>
             </div>
             
             <div class="settings-section" style="border-left: 4px solid #ef4444;">
-                <div class="settings-title" style="color: #ef4444;">⚠️ Danger Zone</div>
+                <div class="settings-title" style="color: #ef4444;"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-warning"/></svg>Danger Zone</div>
                 <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.9rem;">
                     Resetting the system will delete all data including saved clips, thumbnails, credentials, and configuration. This action cannot be undone.
                 </p>
-                <button class="btn" style="background: #ef4444;" onclick="app.confirmReset()">🗑️ Reset System</button>
+                <button class="btn" style="background: #ef4444;" onclick="app.confirmReset()"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-trash"/></svg>Reset System</button>
             </div>
         `;
         
         // Attach event listeners
-        document.getElementById('saveSettingsBtn')?.addEventListener('click', () => this.saveSettings());
+        document.getElementById('saveAppearanceBtn')?.addEventListener('click', () => this.saveAppearance());
         document.getElementById('saveCredentialsBtn')?.addEventListener('click', () => this.saveCredentials());
+        document.getElementById('saveSystemParamsBtn')?.addEventListener('click', () => this.saveSystemParams());
         
         // Load media download settings
         this.loadMediaSettings();
+        
+        // Load BlinkBridge settings
+        this.loadBlinkBridgeSettings();
+    }
+    
+    async saveSystemParams() {
+        try {
+            const refreshInterval = parseInt(document.getElementById('refreshInterval').value) * 60; // Convert to seconds
+            const defaultDuration = parseFloat(document.getElementById('defaultDuration').value);
+            const retryLimit = parseInt(document.getElementById('retryLimit').value);
+            
+            const response = await fetch('/api/system/params', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    refresh_interval: refreshInterval,
+                    default_duration_hours: defaultDuration,
+                    retry_limit: retryLimit
+                })
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to save parameters');
+            }
+            
+            this.showMessage('System parameters saved successfully', 'success');
+            await this.loadData(); // Reload config
+        } catch (error) {
+            this.showMessage('Failed to save parameters: ' + error.message, 'error');
+        }
     }
     
     renderLogsPage() {
@@ -616,7 +746,7 @@ class MyBlinkApp {
         
         container.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-                <h2 style="font-size: 1.5rem; font-weight: 600;">📋 Logs</h2>
+                <h2 style="font-size: 1.5rem; font-weight: 600;"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-clipboard"/></svg>Logs</h2>
                 <button class="btn btn-secondary" onclick="app.showPage('settings')">← Back to Settings</button>
             </div>
             
@@ -715,12 +845,1035 @@ class MyBlinkApp {
         }
     }
     
-    async saveSettings() {
+    renderSchedulesPage() {
+        const container = document.getElementById('schedulesPage');
+        
+        container.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                <h2 style="font-size: 1.5rem; font-weight: 600;"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-calendar"/></svg>Schedules</h2>
+                <button class="btn btn-secondary" onclick="app.showPage('main')">← Back to Home</button>
+            </div>
+            
+            <div class="settings-section">
+                <div class="settings-title"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-plus"/></svg>Create Schedule</div>
+                <form id="scheduleForm">
+                    <div class="settings-grid">
+                        <div class="form-group">
+                            <label class="form-label">Schedule Name</label>
+                            <input type="text" id="scheduleName" class="form-input" 
+                                   placeholder="e.g., Barn Driveway Motion" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">What to Control</label>
+                            <select id="scheduleTarget" class="form-select" required>
+                                <option value="">Select a target...</option>
+                                <optgroup label="Cameras">
+                                    ${this.getCameraOptions()}
+                                </optgroup>
+                                <optgroup label="Sync Modules">
+                                    ${this.getSyncOptions()}
+                                </optgroup>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Action</label>
+                            <select id="scheduleAction" class="form-select" required>
+                                <option value="">Select an action...</option>
+                                <option value="camera_motion_enable">Unsnooze Camera (Enable Motion)</option>
+                                <option value="camera_motion_disable">Snooze Camera (Disable Motion)</option>
+                                <option value="camera_thumbnail">Capture Thumbnail</option>
+                                <option value="sync_arm">Arm Sync Module</option>
+                                <option value="sync_disarm">Disarm Sync Module</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Run Every</label>
+                            <div style="display: flex; gap: 0.5rem;">
+                                <input type="number" id="scheduleIntervalHours" class="form-input" 
+                                       placeholder="Hours" min="0" max="24" value="0" style="width: 50%;">
+                                <input type="number" id="scheduleIntervalMinutes" class="form-input" 
+                                       placeholder="Minutes" min="0" max="59" value="60" style="width: 50%;">
+                            </div>
+                            <small style="color: var(--text-secondary);">e.g., "4 hours 0 minutes" or "0 hours 30 minutes"</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Start At Minute (Optional)</label>
+                            <input type="number" id="scheduleStartMinute" class="form-input" 
+                                   placeholder="0-59" min="0" max="59">
+                            <small style="color: var(--text-secondary);">Run at specific minute (e.g., 27 for ":27 past each hour")</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Duration (Hours, Optional)</label>
+                            <input type="number" id="scheduleDuration" class="form-input" 
+                                   placeholder="How long to keep active" min="0" max="24" step="0.5">
+                            <small style="color: var(--text-secondary);">For enable/arm actions, how long before auto-disable</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Active Time Window (Optional)</label>
+                            <div style="display: flex; gap: 0.5rem;">
+                                <input type="time" id="scheduleStartTime" class="form-input" style="width: 50%;">
+                                <input type="time" id="scheduleEndTime" class="form-input" style="width: 50%;">
+                            </div>
+                            <small style="color: var(--text-secondary);">Only run between these times</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Active Days (Optional)</label>
+                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem;">
+                                <label style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+                                    <input type="checkbox" value="mon"> Mon
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+                                    <input type="checkbox" value="tue"> Tue
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+                                    <input type="checkbox" value="wed"> Wed
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+                                    <input type="checkbox" value="thu"> Thu
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+                                    <input type="checkbox" value="fri"> Fri
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+                                    <input type="checkbox" value="sat"> Sat
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+                                    <input type="checkbox" value="sun"> Sun
+                                </label>
+                            </div>
+                            <small style="color: var(--text-secondary);">Leave unchecked to run every day</small>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+                        <button type="submit" class="btn">Create Schedule</button>
+                        <button type="button" class="btn btn-secondary" onclick="document.getElementById('scheduleForm').reset()">Clear</button>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="settings-section">
+                <div class="settings-title"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-clipboard"/></svg>Active Schedules</div>
+                <div id="schedulesList">
+                    <div class="loading">Loading schedules...</div>
+                </div>
+            </div>
+            
+            <div class="settings-section">
+                <div class="settings-title"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-edit"/></svg>Execution Log</div>
+                <div style="margin-bottom: 1rem;">
+                    <label class="form-label">Time Range</label>
+                    <select id="executionLogTimeRange" class="form-select" onchange="app.loadExecutionLog()" style="max-width: 300px;">
+                        <option value="24">Last 24 Hours</option>
+                        <option value="168" selected>Last 7 Days</option>
+                        <option value="720">Last 30 Days</option>
+                    </select>
+                </div>
+                <div id="executionLogList">
+                    <div class="loading">Loading execution log...</div>
+                </div>
+            </div>
+        `;
+        
+        // Attach form submit handler
+        document.getElementById('scheduleForm')?.addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.createSchedule();
+        });
+        
+        // Load existing schedules and execution log
+        this.loadSchedules();
+        this.loadExecutionLog();
+    }
+    
+    getCameraOptions() {
+        if (!this.state.syncs || this.state.syncs.length === 0) {
+            return '<option disabled>No cameras available</option>';
+        }
+        
+        let options = [];
+        this.state.syncs.forEach(sync => {
+            if (sync.cameras) {
+                sync.cameras.forEach(camera => {
+                    options.push(`<option value="camera:${camera.name}">${camera.name}</option>`);
+                });
+            }
+        });
+        
+        return options.length > 0 ? options.join('') : '<option disabled>No cameras available</option>';
+    }
+    
+    getSyncOptions() {
+        if (!this.state.syncs || this.state.syncs.length === 0) {
+            return '<option disabled>No sync modules available</option>';
+        }
+        
+        return this.state.syncs.map(sync => 
+            `<option value="sync:${sync.name}">${sync.name}</option>`
+        ).join('');
+    }
+    
+    async loadSchedules() {
+        try {
+            const response = await fetch('/api/schedules');
+            if (!response.ok) throw new Error('Failed to load schedules');
+            
+            const data = await response.json();
+            const schedules = data.rules || [];
+            this.displaySchedules(schedules);
+        } catch (error) {
+            document.getElementById('schedulesList').innerHTML = 
+                `<div class="loading" style="color: #ef4444;">Failed to load schedules: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+    
+    displaySchedules(schedules) {
+        const container = document.getElementById('schedulesList');
+        
+        if (!schedules || schedules.length === 0) {
+            container.innerHTML = '<div class="loading">No schedules configured yet</div>';
+            return;
+        }
+        
+        container.innerHTML = schedules.map(schedule => {
+            const statusColor = schedule.enabled ? 'var(--success)' : 'var(--text-secondary)';
+            const statusIcon = schedule.enabled 
+                ? '<svg class="icon-sm"><use href="#icon-check"/></svg>' 
+                : '<svg class="icon-sm"><use href="#icon-circle"/></svg>';
+            
+            // Format interval
+            let intervalText = '';
+            if (schedule.interval_hours > 0 && schedule.interval_minutes > 0) {
+                intervalText = `Every ${schedule.interval_hours}h ${schedule.interval_minutes}m`;
+            } else if (schedule.interval_hours > 0) {
+                intervalText = `Every ${schedule.interval_hours} hour${schedule.interval_hours > 1 ? 's' : ''}`;
+            } else if (schedule.interval_minutes > 0) {
+                intervalText = `Every ${schedule.interval_minutes} minutes`;
+            }
+            
+            if (schedule.start_minute !== null) {
+                intervalText += ` at :${String(schedule.start_minute).padStart(2, '0')}`;
+            }
+            
+            // Format time window
+            let timeWindow = '';
+            if (schedule.start_time && schedule.end_time) {
+                timeWindow = `<div style="font-size: 0.85rem; color: var(--text-secondary);">
+                    ${schedule.start_time} - ${schedule.end_time}
+                </div>`;
+            }
+            
+            // Format days
+            let daysText = '';
+            if (schedule.days_of_week) {
+                daysText = `<div style="font-size: 0.85rem; color: var(--text-secondary);">
+                    ${schedule.days_of_week}
+                </div>`;
+            }
+            
+            // Format duration
+            let durationText = '';
+            if (schedule.duration_hours) {
+                durationText = `<div style="font-size: 0.85rem; color: var(--text-secondary);">
+                    Duration: ${schedule.duration_hours}h
+                </div>`;
+            }
+            
+            // Next run time
+            let nextRunText = '';
+            if (schedule.next_run) {
+                const nextRun = new Date(schedule.next_run);
+                nextRunText = `<div style="font-size: 0.85rem; color: var(--text-secondary);">
+                    Next: ${this.formatDateTime(nextRun)}
+                </div>`;
+            }
+            
+            return `
+                <div class="schedule-item" style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                                <span style="color: ${statusColor}; font-weight: bold;">${statusIcon}</span>
+                                <span style="font-weight: 600; font-size: 1.05rem;">${this.escapeHtml(schedule.rule_name)}</span>
+                            </div>
+                            <div style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0.5rem;">
+                                ${this.escapeHtml(schedule.target_id)} → ${this.formatScheduleAction(schedule)}
+                            </div>
+                            <div style="font-size: 0.95rem; color: var(--primary); font-weight: 500;">
+                                ${intervalText}
+                            </div>
+                            ${timeWindow}
+                            ${daysText}
+                            ${durationText}
+                            ${nextRunText}
+                        </div>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button class="btn btn-secondary" style="padding: 0.4rem 0.8rem; font-size: 0.85rem;" 
+                                    onclick="app.toggleSchedule(${schedule.id}, ${!schedule.enabled})">
+                                ${schedule.enabled ? 'Pause' : 'Resume'}
+                            </button>
+                            <button class="btn btn-secondary" style="padding: 0.4rem 0.8rem; font-size: 0.85rem; background: #ef4444;" 
+                                    onclick="app.deleteSchedule(${schedule.id}, '${this.escapeHtml(schedule.rule_name)}')">
+                                <svg class="icon-sm"><use href="#icon-trash"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+    
+    formatScheduleAction(schedule) {
+        const actions = {
+            'CAMERA_MOTION': schedule.action === 'enable' ? 'Unsnooze (Enable Motion)' : 'Snooze (Disable Motion)',
+            'CAMERA_THUMBNAIL': 'Capture Thumbnail',
+            'SYNC_ARM': 'Arm System',
+            'SYNC_DISARM': 'Disarm System'
+        };
+        return actions[schedule.rule_type] || schedule.rule_type;
+    }
+    
+    async createSchedule() {
+        try {
+            const form = document.getElementById('scheduleForm');
+            const target = document.getElementById('scheduleTarget').value;
+            const action = document.getElementById('scheduleAction').value;
+            
+            if (!target || !action) {
+                this.showMessage('Please select a target and action', 'error');
+                return;
+            }
+            
+            // Parse target type and name
+            const [targetType, targetName] = target.split(':');
+            
+            // Determine rule type based on action
+            let ruleType, ruleAction;
+            if (action.startsWith('camera_motion')) {
+                ruleType = 'CAMERA_MOTION';
+                ruleAction = action === 'camera_motion_enable' ? 'enable' : 'disable';
+            } else if (action === 'camera_thumbnail') {
+                ruleType = 'CAMERA_THUMBNAIL';
+                ruleAction = 'capture';
+            } else if (action === 'sync_arm') {
+                ruleType = 'SYNC_ARM';
+                ruleAction = 'arm';
+            } else if (action === 'sync_disarm') {
+                ruleType = 'SYNC_DISARM';
+                ruleAction = 'disarm';
+            }
+            
+            // Get days of week
+            const daysChecked = Array.from(document.querySelectorAll('#scheduleForm input[type="checkbox"]:checked'))
+                .map(cb => cb.value);
+            
+            const scheduleData = {
+                rule_name: document.getElementById('scheduleName').value,
+                rule_type: ruleType,
+                target_id: targetName,
+                action: ruleAction,
+                enabled: true,
+                interval_hours: parseInt(document.getElementById('scheduleIntervalHours').value) || 0,
+                interval_minutes: parseInt(document.getElementById('scheduleIntervalMinutes').value) || 0,
+                start_minute: document.getElementById('scheduleStartMinute').value ? 
+                    parseInt(document.getElementById('scheduleStartMinute').value) : null,
+                duration_hours: document.getElementById('scheduleDuration').value ? 
+                    parseFloat(document.getElementById('scheduleDuration').value) : null,
+                start_time: document.getElementById('scheduleStartTime').value || null,
+                end_time: document.getElementById('scheduleEndTime').value || null,
+                days_of_week: daysChecked.length > 0 ? daysChecked.join(',') : null
+            };
+            
+            // Validate interval
+            if (scheduleData.interval_hours === 0 && scheduleData.interval_minutes === 0) {
+                this.showMessage('Please specify an interval (hours and/or minutes)', 'error');
+                return;
+            }
+            
+            const response = await fetch('/api/schedules', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(scheduleData)
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to create schedule');
+            }
+            
+            this.showMessage('Schedule created successfully', 'success');
+            form.reset();
+            this.loadSchedules();
+        } catch (error) {
+            this.showMessage('Failed to create schedule: ' + error.message, 'error');
+        }
+    }
+    
+    async toggleSchedule(id, enabled) {
+        try {
+            const response = await fetch(`/api/schedules/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled })
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to update schedule');
+            }
+            
+            this.showMessage(`Schedule ${enabled ? 'resumed' : 'paused'}`, 'success');
+            this.loadSchedules();
+        } catch (error) {
+            this.showMessage('Failed to update schedule: ' + error.message, 'error');
+        }
+    }
+    
+    async deleteSchedule(id, name) {
+        if (!confirm(`Are you sure you want to delete the schedule "${name}"?`)) {
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/schedules/${id}`, {
+                method: 'DELETE'
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to delete schedule');
+            }
+            
+            this.showMessage('Schedule deleted successfully', 'success');
+            this.loadSchedules();
+        } catch (error) {
+            this.showMessage('Failed to delete schedule: ' + error.message, 'error');
+        }
+    }
+    
+    async loadExecutionLog() {
+        try {
+            const hours = document.getElementById('executionLogTimeRange')?.value || 168;
+            const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+            
+            const response = await fetch(`/api/schedules/execution-log?since=${encodeURIComponent(since)}&limit=100`);
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to load execution log');
+            }
+            
+            const data = await response.json();
+            const logs = data.logs || [];
+            this.displayExecutionLog(logs);
+        } catch (error) {
+            document.getElementById('executionLogList').innerHTML = 
+                `<div class="loading" style="color: #ef4444;">Failed to load execution log: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+    
+    displayExecutionLog(logs) {
+        const container = document.getElementById('executionLogList');
+        
+        if (!logs || logs.length === 0) {
+            container.innerHTML = '<div class="loading">No execution log entries yet</div>';
+            return;
+        }
+        
+        const logHtml = logs.map(log => {
+            const timestamp = new Date(log.executed_at);
+            const statusColor = log.success ? '#10b981' : '#ef4444';
+            const statusIcon = log.success 
+                ? '<svg class="icon-sm" style="color: #10b981;"><use href="#icon-check"/></svg>' 
+                : '<svg class="icon-sm" style="color: #ef4444;"><use href="#icon-circle"/></svg>';
+            const durationText = log.duration_ms ? `${log.duration_ms}ms` : '-';
+            
+            return `
+                <div style="padding: 1rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+                    <div style="flex: 1;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                            <span style="color: ${statusColor}; font-weight: 600; font-size: 1.2rem;">${statusIcon}</span>
+                            <strong>${this.escapeHtml(log.action)}</strong>
+                            <span style="color: var(--text-secondary);">${this.escapeHtml(log.target_type)} • ${this.escapeHtml(log.target_name)}</span>
+                        </div>
+                        <div style="font-size: 0.875rem; color: var(--text-secondary);">
+                            ${this.formatDateTime(timestamp)} • ${durationText}
+                            ${log.error_message ? `<br><span style="color: #ef4444;">Error: ${this.escapeHtml(log.error_message)}</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+        container.innerHTML = logHtml;
+    }
+    
+    formatDuration(minutes) {
+        // Handle invalid values
+        if (minutes == null || isNaN(minutes) || minutes === 0) {
+            return '0 min';
+        }
+        
+        if (minutes < 60) {
+            return Math.round(minutes) + ' min';
+        } else if (minutes < 1440) {
+            const hours = Math.floor(minutes / 60);
+            const mins = Math.round(minutes % 60);
+            return `${hours}h ${mins}m`;
+        } else {
+            const days = Math.floor(minutes / 1440);
+            const hours = Math.floor((minutes % 1440) / 60);
+            return `${days}d ${hours}h`;
+        }
+    }
+    
+    formatRelativeTime(date, hoursRange) {
+        const now = new Date();
+        const diffMs = now - date;
+        const diffHours = diffMs / (1000 * 60 * 60);
+        const diffDays = diffHours / 24;
+        
+        // For ranges less than 48 hours, show hourly labels
+        if (hoursRange <= 48) {
+            if (diffHours < 1) {
+                return Math.round(diffMs / (1000 * 60)) + 'm ago';
+            } else if (diffHours < 24) {
+                return Math.round(diffHours) + 'h ago';
+            } else {
+                const days = Math.floor(diffHours / 24);
+                const hours = Math.round(diffHours % 24);
+                return `${days}d ${hours}h ago`;
+            }
+        }
+        // For longer ranges, show daily labels  
+        else {
+            if (diffDays < 1) {
+                return Math.round(diffHours) + 'h ago';
+            } else if (diffDays < 7) {
+                return Math.round(diffDays) + 'd ago';
+            } else {
+                const weeks = Math.floor(diffDays / 7);
+                return weeks + 'w ago';
+            }
+        }
+    }
+    
+    updateTimeScale(elementId, history, hoursRange) {
+        if (!history || history.length === 0) {
+            document.getElementById(elementId).textContent = '';
+            return;
+        }
+        
+        const oldest = new Date(history[history.length - 1].timestamp);
+        const newest = new Date(history[0].timestamp);
+        const spanMs = newest - oldest;
+        const spanHours = spanMs / (1000 * 60 * 60);
+        const spanDays = spanHours / 24;
+        
+        let timeSpanText;
+        if (spanHours < 24) {
+            timeSpanText = `${Math.round(spanHours)} hours`;
+        } else if (spanDays < 7) {
+            timeSpanText = `${Math.round(spanDays)} days`;
+        } else {
+            timeSpanText = `${Math.round(spanDays / 7)} weeks`;
+        }
+        
+        document.getElementById(elementId).textContent = 
+            `Showing ${history.length} data points spanning ${timeSpanText}`;
+    }
+    
+    downloadBatteryCSV() {
+        if (!this.currentBatteryData || this.currentBatteryData.length === 0) {
+            this.showMessage('No battery data to download', 'info');
+            return;
+        }
+        
+        const camera = document.getElementById('batteryCameraSelect').value;
+        const csv = this.generateBatteryCSV(this.currentBatteryData);
+        this.downloadCSV(csv, `battery-history-${camera}-${new Date().toISOString().split('T')[0]}.csv`);
+        this.showMessage('Battery CSV downloaded', 'success');
+    }
+    
+    downloadStatusCSV() {
+        if (!this.currentStatusData || this.currentStatusData.length === 0) {
+            this.showMessage('No status data to download', 'info');
+            return;
+        }
+        
+        const camera = document.getElementById('statusCameraSelect').value;
+        const csv = this.generateStatusCSV(this.currentStatusData);
+        this.downloadCSV(csv, `status-history-${camera}-${new Date().toISOString().split('T')[0]}.csv`);
+        this.showMessage('Status CSV downloaded', 'success');
+    }
+    
+    generateBatteryCSV(data) {
+        const header = 'Timestamp,Camera,Battery Voltage (V),Battery Level (%)\n';
+        const rows = data.map(record => {
+            const timestamp = new Date(record.timestamp).toISOString();
+            const voltage = (record.battery_voltage / 100).toFixed(2);
+            const level = record.battery_level || '-';
+            return `${timestamp},${record.camera_name},${voltage},${level}`;
+        }).join('\n');
+        return header + rows;
+    }
+    
+    generateStatusCSV(data) {
+        const header = 'Timestamp,Camera,Status,Signal Strength\n';
+        const rows = data.map(record => {
+            const timestamp = new Date(record.timestamp).toISOString();
+            const status = record.is_online ? 'Online' : 'Offline';
+            const signal = record.signal_strength || '-';
+            return `${timestamp},${record.camera_name},${status},${signal}`;
+        }).join('\n');
+        return header + rows;
+    }
+    
+    downloadCSV(csvContent, filename) {
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', filename);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+    
+    // Camera Modal Chart Functions
+    
+    initializeCameraModalCharts() {
+        // Initialize battery chart for modal
+        const batteryCtx = document.getElementById('modalBatteryChart');
+        if (batteryCtx) {
+            if (this.cameraModalBatteryChart) {
+                this.cameraModalBatteryChart.destroy();
+            }
+            this.cameraModalBatteryChart = new Chart(batteryCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Battery Voltage',
+                        data: [],
+                        borderColor: 'rgb(16, 185, 129)',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text')
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                title: function(context) {
+                                    return context[0].label;
+                                },
+                                label: function(context) {
+                                    return 'Battery: ' + context.parsed.y.toFixed(2) + 'V';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: {
+                                maxRotation: 45,
+                                minRotation: 45,
+                                autoSkip: true,
+                                maxTicksLimit: 6,
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text-secondary')
+                            },
+                            grid: {
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--border')
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Voltage (V)',
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text')
+                            },
+                            ticks: {
+                                callback: function(value) {
+                                    return value.toFixed(2) + 'V';
+                                },
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text-secondary')
+                            },
+                            grid: {
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--border')
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Initialize status chart for modal
+        const statusCtx = document.getElementById('modalStatusChart');
+        if (statusCtx) {
+            if (this.cameraModalStatusChart) {
+                this.cameraModalStatusChart.destroy();
+            }
+            this.cameraModalStatusChart = new Chart(statusCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Online',
+                        data: [],
+                        borderColor: 'rgb(16, 185, 129)',
+                        backgroundColor: 'rgba(16, 185, 129, 0.3)',
+                        stepped: true,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text')
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return context.parsed.y === 1 ? 'Online' : 'Offline';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: {
+                                maxRotation: 45,
+                                minRotation: 45,
+                                autoSkip: true,
+                                maxTicksLimit: 6,
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text-secondary')
+                            },
+                            grid: {
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--border')
+                            }
+                        },
+                        y: {
+                            min: 0,
+                            max: 1,
+                            title: {
+                                display: true,
+                                text: 'Status',
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text')
+                            },
+                            ticks: {
+                                stepSize: 1,
+                                callback: function(value) {
+                                    return value === 1 ? 'Online' : 'Offline';
+                                },
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text-secondary')
+                            },
+                            grid: {
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--border')
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+    
+    initializeSyncModalCharts() {
+        // Initialize status chart for sync module modal (uptime only, no battery)
+        const statusCtx = document.getElementById('modalSyncStatusChart');
+        if (statusCtx) {
+            if (this.syncModalStatusChart) {
+                this.syncModalStatusChart.destroy();
+            }
+            this.syncModalStatusChart = new Chart(statusCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Online',
+                        data: [],
+                        borderColor: 'rgb(16, 185, 129)',
+                        backgroundColor: 'rgba(16, 185, 129, 0.3)',
+                        stepped: true,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text')
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return context.parsed.y === 1 ? 'Online' : 'Offline';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: {
+                                maxRotation: 45,
+                                minRotation: 45,
+                                autoSkip: true,
+                                maxTicksLimit: 6,
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text-secondary')
+                            },
+                            grid: {
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--border')
+                            }
+                        },
+                        y: {
+                            min: 0,
+                            max: 1,
+                            title: {
+                                display: true,
+                                text: 'Status',
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text')
+                            },
+                            ticks: {
+                                stepSize: 1,
+                                callback: function(value) {
+                                    return value === 1 ? 'Online' : 'Offline';
+                                },
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--text-secondary')
+                            },
+                            grid: {
+                                color: getComputedStyle(document.documentElement).getPropertyValue('--border')
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+    
+    async loadCameraModalBatteryHistory(camera) {
+        const hours = document.getElementById('modalBatteryTimeRange').value;
+        
+        if (!camera) {
+            return;
+        }
+        
+        try {
+            const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+            const response = await fetch(`/api/history/battery/${encodeURIComponent(camera)}?since=${encodeURIComponent(since)}`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to load battery history');
+            }
+            
+            const data = await response.json();
+            const history = data.history || [];
+            
+            // Store for CSV export
+            this.currentModalBatteryData = history;
+            
+            if (history.length === 0) {
+                document.getElementById('modalBatteryTimeScale').textContent = 'No data available';
+                return;
+            }
+            
+            // Update chart with relative time labels
+            const labels = history.map(h => {
+                const date = new Date(h.timestamp);
+                return this.formatRelativeTime(date, parseInt(hours));
+            });
+            const voltages = history.map(h => h.battery_voltage / 100);
+            
+            this.cameraModalBatteryChart.data.labels = labels;
+            this.cameraModalBatteryChart.data.datasets[0].data = voltages;
+            this.cameraModalBatteryChart.update();
+            
+            // Update time scale indicator
+            this.updateTimeScaleModal('modalBatteryTimeScale', history, parseInt(hours));
+            
+            // Load and display stats
+            await this.loadCameraModalBatteryStats(camera, hours);
+            
+        } catch (error) {
+            this.showMessage('Failed to load battery history: ' + error.message, 'error');
+        }
+    }
+    
+    async loadCameraModalBatteryStats(camera, hours) {
+        try {
+            const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+            const response = await fetch(`/api/history/battery/${encodeURIComponent(camera)}/stats?since=${encodeURIComponent(since)}`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to load battery stats');
+            }
+            
+            const stats = await response.json();
+            
+            document.getElementById('modalAvgVoltage').textContent = (stats.average_voltage / 100).toFixed(2) + 'V';
+            document.getElementById('modalMinVoltage').textContent = (stats.min_voltage / 100).toFixed(2) + 'V';
+            document.getElementById('modalMaxVoltage').textContent = (stats.max_voltage / 100).toFixed(2) + 'V';
+            document.getElementById('modalBatteryStats').style.display = 'block';
+            
+        } catch (error) {
+            console.error('Failed to load battery stats:', error);
+        }
+    }
+    
+    async loadCameraModalStatusHistory(camera) {
+        const hours = document.getElementById('modalStatusTimeRange').value;
+        
+        if (!camera) {
+            return;
+        }
+        
+        try {
+            const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+            const response = await fetch(`/api/history/status/${encodeURIComponent(camera)}?since=${encodeURIComponent(since)}`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to load status history');
+            }
+            
+            const data = await response.json();
+            const history = data.history || [];
+            
+            // Store for CSV export
+            this.currentModalStatusData = history;
+            
+            if (history.length === 0) {
+                document.getElementById('modalStatusTimeScale').textContent = 'No data available';
+                return;
+            }
+            
+            // Update chart with relative time labels
+            const labels = history.map(h => {
+                const date = new Date(h.timestamp);
+                return this.formatRelativeTime(date, parseInt(hours));
+            });
+            const statusValues = history.map(h => h.is_online ? 1 : 0);
+            
+            this.cameraModalStatusChart.data.labels = labels;
+            this.cameraModalStatusChart.data.datasets[0].data = statusValues;
+            this.cameraModalStatusChart.update();
+            
+            // Update time scale indicator
+            this.updateTimeScaleModal('modalStatusTimeScale', history, parseInt(hours));
+            
+            // Load and display stats
+            await this.loadCameraModalStatusStats(camera, hours);
+            
+        } catch (error) {
+            this.showMessage('Failed to load status history: ' + error.message, 'error');
+        }
+    }
+    
+    async loadCameraModalStatusStats(camera, hours) {
+        try {
+            const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+            const response = await fetch(`/api/history/status/${encodeURIComponent(camera)}/stats?since=${encodeURIComponent(since)}`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to load status stats');
+            }
+            
+            const stats = await response.json();
+            
+            document.getElementById('modalUptimePercent').textContent = stats.uptime_percentage.toFixed(1) + '%';
+            document.getElementById('modalOnlineTime').textContent = this.formatDuration(stats.total_online_minutes);
+            document.getElementById('modalOfflineTime').textContent = this.formatDuration(stats.total_offline_minutes);
+            document.getElementById('modalStatusStats').style.display = 'block';
+            
+        } catch (error) {
+            console.error('Failed to load status stats:', error);
+        }
+    }
+    
+    updateTimeScaleModal(elementId, history, hoursRange) {
+        if (!history || history.length === 0) {
+            document.getElementById(elementId).textContent = '';
+            return;
+        }
+        
+        const oldest = new Date(history[history.length - 1].timestamp);
+        const newest = new Date(history[0].timestamp);
+        const spanMs = newest - oldest;
+        const spanHours = spanMs / (1000 * 60 * 60);
+        const spanDays = spanHours / 24;
+        
+        let timeSpanText;
+        if (spanHours < 24) {
+            timeSpanText = `${Math.round(spanHours)} hours`;
+        } else if (spanDays < 7) {
+            timeSpanText = `${Math.round(spanDays)} days`;
+        } else {
+            timeSpanText = `${Math.round(spanDays / 7)} weeks`;
+        }
+        
+        document.getElementById(elementId).textContent = 
+            `${history.length} data points spanning ${timeSpanText}`;
+    }
+    
+    downloadCameraModalBatteryCSV() {
+        if (!this.currentModalBatteryData || this.currentModalBatteryData.length === 0) {
+            this.showMessage('No battery data to download', 'info');
+            return;
+        }
+        
+        const camera = this.currentCameraName;
+        const csv = this.generateBatteryCSV(this.currentModalBatteryData);
+        this.downloadCSV(csv, `battery-history-${camera}-${new Date().toISOString().split('T')[0]}.csv`);
+        this.showMessage('Battery CSV downloaded', 'success');
+    }
+    
+    downloadCameraModalStatusCSV() {
+        if (!this.currentModalStatusData || this.currentModalStatusData.length === 0) {
+            this.showMessage('No status data to download', 'info');
+            return;
+        }
+        
+        const camera = this.currentCameraName;
+        const csv = this.generateStatusCSV(this.currentModalStatusData);
+        this.downloadCSV(csv, `status-history-${camera}-${new Date().toISOString().split('T')[0]}.csv`);
+        this.showMessage('Status CSV downloaded', 'success');
+    }
+    
+    async saveAppearance() {
         try {
             const settings = {
-                schedule_interval_hours: parseInt(document.getElementById('scheduleInterval').value),
-                blink_retry_limit: parseInt(document.getElementById('retryLimit').value),
-                voipms_sms_wait: parseInt(document.getElementById('smsWait').value),
                 theme: document.getElementById('themeSelect').value,
                 web_time_format: document.getElementById('timeFormatSelect').value
             };
@@ -731,7 +1884,7 @@ class MyBlinkApp {
                 body: JSON.stringify(settings)
             });
             
-            if (!response.ok) throw new Error('Failed to save settings');
+            if (!response.ok) throw new Error('Failed to save appearance settings');
             
             // Update theme if changed
             if (settings.theme !== this.theme) {
@@ -744,10 +1897,10 @@ class MyBlinkApp {
                 this.config.web_time_format = settings.web_time_format;
             }
             
-            this.showMessage('Settings saved successfully!', 'success');
+            this.showMessage('Appearance settings saved successfully!', 'success');
             await this.loadData();
         } catch (error) {
-            this.showMessage('Failed to save settings: ' + error.message, 'error');
+            this.showMessage('Failed to save appearance settings: ' + error.message, 'error');
         }
     }
     
@@ -787,7 +1940,7 @@ class MyBlinkApp {
     }
     
     async confirmReset() {
-        const message = `⚠️ <strong>WARNING:</strong> This will permanently delete ALL data including:
+        const message = `<strong>WARNING:</strong> This will permanently delete ALL data including:
 
 • All saved video clips and thumbnails
 • All credentials (Blink and VoIP.ms)
@@ -887,12 +2040,12 @@ Are you absolutely sure you want to reset the system?`;
                 <div id="mediaDetailsSection" style="display: ${config.enabled ? 'block' : 'none'};">
                     ${status.enabled ? `
                         <div style="background: rgba(34, 197, 94, 0.1); border-left: 4px solid #22c55e; padding: 0.75rem; margin-bottom: 1rem; border-radius: 4px;">
-                            <div style="font-weight: 500; margin-bottom: 0.25rem;">Status: ${status.running ? '✅ Running' : '⏸️ Enabled but not running'}</div>
+                            <div style="font-weight: 500; margin-bottom: 0.25rem;">Status: ${status.running ? 'Running' : 'Enabled but not running'}</div>
                             <div style="font-size: 0.875rem; color: var(--text-secondary); font-family: monospace;">
-                                📹 ${status.total_clips || 0} clips • 📸 ${status.total_thumbnails || 0} thumbnails • 💾 ${status.total_size_mb || 0} MB
+                                ${status.total_clips || 0} clips • ${status.total_thumbnails || 0} thumbnails • ${status.total_size_mb || 0} MB
                             </div>
                             <div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.25rem;">
-                                📂 ${status.base_path || config.base_path}
+                                ${status.base_path || config.base_path}
                             </div>
                         </div>
                     ` : ''}
@@ -1109,25 +2262,383 @@ Are you absolutely sure you want to reset the system?`;
         }
     }
     
+    async loadBlinkBridgeSettings() {
+        try {
+            const [statusResp, streamsResp] = await Promise.all([
+                fetch('/api/blinkbridge/status'),
+                fetch('/api/blinkbridge/streams')
+            ]);
+            
+            if (!statusResp.ok) {
+                throw new Error('Failed to load BlinkBridge status');
+            }
+            
+            const status = await statusResp.json();
+            const streams = streamsResp.ok ? await streamsResp.json() : {};
+            
+            const container = document.getElementById('blinkBridgeSettings');
+            if (!container) return;
+            
+            const streamCount = Object.keys(streams).length;
+            const statusColor = status.running ? 'rgba(34, 197, 94, 0.1)' : 'rgba(156, 163, 175, 0.1)';
+            const statusBorder = status.running ? '#22c55e' : '#9ca3af';
+            const statusText = status.running ? 'Running' : status.enabled ? 'Enabled (Not Running)' : 'Disabled';
+            
+            container.innerHTML = `
+                <div class="form-group" style="margin-bottom: 1rem;">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                        <input type="checkbox" id="blinkbridgeEnabled" 
+                               ${status.enabled ? 'checked' : ''}
+                               style="width: 20px; height: 20px; cursor: pointer;">
+                        <span class="form-label" style="margin: 0;">Enable BlinkBridge RTSP Streaming</span>
+                    </label>
+                    <small style="color: var(--text-secondary); display: block; margin-top: 0.25rem; margin-left: 28px;">
+                        Stream cameras to Frigate, Home Assistant, or any RTSP client
+                    </small>
+                </div>
+                
+                <div id="blinkbridgeDetailsSection" style="display: ${status.enabled ? 'block' : 'none'};">
+                    ${status.running ? `
+                        <div style="background: ${statusColor}; border-left: 4px solid ${statusBorder}; padding: 0.75rem; margin-bottom: 1rem; border-radius: 4px;">
+                            <div style="font-weight: 500; margin-bottom: 0.25rem;">Status: ${statusText}</div>
+                            <div style="font-size: 0.875rem; color: var(--text-secondary);">
+                                ${streamCount} active stream${streamCount !== 1 ? 's' : ''} • RTSP Port: ${status.config.rtsp_port}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <div class="settings-grid">
+                        <div class="form-group">
+                            <label class="form-label">RTSP Host</label>
+                            <input type="text" id="blinkbridgeHost" class="form-input" 
+                                   value="${status.config.rtsp_host}" placeholder="localhost">
+                            <small style="color: var(--text-secondary); display: block; margin-top: 0.25rem;">
+                                Host for RTSP URLs (use container name for Docker)
+                            </small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">RTSP Port</label>
+                            <input type="number" id="blinkbridgePort" class="form-input" 
+                                   value="${status.config.rtsp_port}" min="1" max="65535">
+                        </div>
+                    </div>
+                    
+                    <div class="settings-grid">
+                        <div class="form-group">
+                            <label class="form-label">Poll Interval (seconds)</label>
+                            <input type="number" id="blinkbridgePollInterval" class="form-input" 
+                                   value="${status.config.poll_interval}" min="0.5" max="60" step="0.5">
+                            <small style="color: var(--text-secondary); display: block; margin-top: 0.25rem;">
+                                How often to check for new clips
+                            </small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Max Failures</label>
+                            <input type="number" id="blinkbridgeMaxFailures" class="form-input" 
+                                   value="${status.config.max_failures}" min="1" max="20">
+                            <small style="color: var(--text-secondary); display: block; margin-top: 0.25rem;">
+                                Restart stream after this many failures
+                            </small>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Camera Selection</label>
+                        <div id="blinkbridgeCameraList" style="max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; background: var(--surface);">
+                            ${this.renderBlinkBridgeCameraList(status.config.enabled_cameras || [])}
+                        </div>
+                        <small style="color: var(--text-secondary); display: block; margin-top: 0.25rem;">
+                            Select cameras to stream via RTSP
+                        </small>
+                    </div>
+                    
+                    ${streamCount > 0 ? `
+                        <div class="form-group" style="margin-top: 1rem;">
+                            <label class="form-label">Active Streams</label>
+                            <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.75rem; max-height: 200px; overflow-y: auto;">
+                                ${this.renderBlinkBridgeStreams(streams)}
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+                
+                <div style="margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <button class="btn" id="saveBlinkBridgeBtn">Save Settings</button>
+                    ${status.enabled && !status.running ? '<button class="btn btn-primary" id="startBlinkBridgeBtn">Start Streaming</button>' : ''}
+                    ${status.running ? '<button class="btn btn-secondary" id="stopBlinkBridgeBtn">Stop Streaming</button>' : ''}
+                    ${status.enabled ? '<button class="btn btn-secondary" id="showFrigateConfigBtn">Show Frigate Config</button>' : ''}
+                </div>
+            `;
+            
+            // Attach event listeners
+            document.getElementById('blinkbridgeEnabled')?.addEventListener('change', (e) => {
+                document.getElementById('blinkbridgeDetailsSection').style.display = e.target.checked ? 'block' : 'none';
+            });
+            
+            document.getElementById('saveBlinkBridgeBtn')?.addEventListener('click', () => this.saveBlinkBridgeSettings());
+            document.getElementById('startBlinkBridgeBtn')?.addEventListener('click', () => this.startBlinkBridge());
+            document.getElementById('stopBlinkBridgeBtn')?.addEventListener('click', () => this.stopBlinkBridge());
+            document.getElementById('showFrigateConfigBtn')?.addEventListener('click', () => this.showFrigateConfig());
+            
+        } catch (error) {
+            console.error('Failed to load BlinkBridge settings:', error);
+            const container = document.getElementById('blinkBridgeSettings');
+            if (container) {
+                container.innerHTML = `<p style="color: var(--error);">Failed to load BlinkBridge settings</p>`;
+            }
+        }
+    }
+    
+    renderBlinkBridgeCameraList(enabledCameras) {
+        if (!this.state.cameras || this.state.cameras.length === 0) {
+            return '<div style="color: var(--text-secondary); padding: 0.5rem;">No cameras available</div>';
+        }
+        
+        return this.state.cameras.map(camera => {
+            const isEnabled = enabledCameras.includes(camera.name);
+            return `
+                <label style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; cursor: pointer; border-radius: 4px; transition: background 0.2s;" 
+                       onmouseover="this.style.background='var(--hover-bg)'" 
+                       onmouseout="this.style.background='transparent'">
+                    <input type="checkbox" class="blinkbridge-camera-checkbox" 
+                           data-camera="${this.escapeHtml(camera.name)}"
+                           ${isEnabled ? 'checked' : ''}
+                           style="width: 18px; height: 18px; cursor: pointer;">
+                    <span style="flex: 1;">${this.escapeHtml(camera.name)}</span>
+                    <span style="font-size: 0.75rem; color: var(--text-secondary); font-family: monospace;">
+                        ${camera.sync || 'Unknown Sync'}
+                    </span>
+                </label>
+            `;
+        }).join('');
+    }
+    
+    renderBlinkBridgeStreams(streams) {
+        return Object.entries(streams).map(([cameraName, info]) => {
+            const statusColor = info.running ? '#22c55e' : '#ef4444';
+            const statusIcon = info.running ? '✓' : '✗';
+            return `
+                <div style="padding: 0.5rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+                    <div style="flex: 1;">
+                        <div style="font-weight: 500; display: flex; align-items: center; gap: 0.5rem;">
+                            <span style="color: ${statusColor}; font-size: 0.875rem;">${statusIcon}</span>
+                            ${this.escapeHtml(cameraName)}
+                        </div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary); font-family: monospace; margin-top: 0.25rem;">
+                            ${this.escapeHtml(info.rtsp_url)}
+                        </div>
+                    </div>
+                    ${info.failure_count > 0 ? `
+                        <span style="font-size: 0.75rem; color: var(--error); padding: 0.25rem 0.5rem; background: rgba(239, 68, 68, 0.1); border-radius: 4px;">
+                            ${info.failure_count} failures
+                        </span>
+                    ` : ''}
+                </div>
+            `;
+        }).join('');
+    }
+    
+    async saveBlinkBridgeSettings() {
+        try {
+            const enabled = document.getElementById('blinkbridgeEnabled')?.checked || false;
+            const enabledCameras = Array.from(document.querySelectorAll('.blinkbridge-camera-checkbox:checked'))
+                .map(cb => cb.getAttribute('data-camera'));
+            
+            const config = {
+                enabled,
+                rtsp_host: document.getElementById('blinkbridgeHost')?.value || 'localhost',
+                rtsp_port: parseInt(document.getElementById('blinkbridgePort')?.value) || 8554,
+                poll_interval: parseFloat(document.getElementById('blinkbridgePollInterval')?.value) || 1.0,
+                max_failures: parseInt(document.getElementById('blinkbridgeMaxFailures')?.value) || 3,
+                enabled_cameras: enabledCameras
+            };
+            
+            const response = await fetch('/api/blinkbridge/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            });
+            
+            if (!response.ok) throw new Error('Failed to save BlinkBridge settings');
+            
+            this.showMessage('BlinkBridge settings saved successfully!', 'success');
+            setTimeout(() => this.loadBlinkBridgeSettings(), 1000);
+            
+        } catch (error) {
+            this.showMessage('Failed to save BlinkBridge settings: ' + error.message, 'error');
+        }
+    }
+    
+    async startBlinkBridge() {
+        try {
+            const enabledCameras = Array.from(document.querySelectorAll('.blinkbridge-camera-checkbox:checked'))
+                .map(cb => cb.getAttribute('data-camera'));
+            
+            if (enabledCameras.length === 0) {
+                this.showMessage('Please select at least one camera to stream', 'warning');
+                return;
+            }
+            
+            this.showLoading('Starting BlinkBridge streaming...');
+            
+            const response = await fetch('/api/blinkbridge/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cameras: enabledCameras })
+            });
+            
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || 'Failed to start BlinkBridge');
+            }
+            
+            this.hideLoading();
+            this.showMessage('BlinkBridge streaming started!', 'success');
+            setTimeout(() => this.loadBlinkBridgeSettings(), 2000);
+            
+        } catch (error) {
+            this.hideLoading();
+            this.showMessage('Failed to start BlinkBridge: ' + error.message, 'error');
+        }
+    }
+    
+    async stopBlinkBridge() {
+        try {
+            this.showLoading('Stopping BlinkBridge streaming...');
+            
+            const response = await fetch('/api/blinkbridge/stop', {
+                method: 'POST'
+            });
+            
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || 'Failed to stop BlinkBridge');
+            }
+            
+            this.hideLoading();
+            this.showMessage('BlinkBridge streaming stopped', 'success');
+            setTimeout(() => this.loadBlinkBridgeSettings(), 1000);
+            
+        } catch (error) {
+            this.hideLoading();
+            this.showMessage('Failed to stop BlinkBridge: ' + error.message, 'error');
+        }
+    }
+    
+    async showFrigateConfig() {
+        try {
+            const enabledCameras = Array.from(document.querySelectorAll('.blinkbridge-camera-checkbox:checked'))
+                .map(cb => cb.getAttribute('data-camera'));
+            
+            const url = enabledCameras.length > 0 
+                ? `/api/blinkbridge/frigate?cameras=${enabledCameras.join(',')}`
+                : '/api/blinkbridge/frigate';
+            
+            const response = await fetch(url);
+            
+            if (!response.ok) {
+                throw new Error('Failed to generate Frigate config');
+            }
+            
+            const data = await response.json();
+            
+            // Create modal
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 800px;">
+                    <div class="modal-header">
+                        <h3 style="margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+                            <svg class="icon" style="width: 24px; height: 24px;">
+                                <use href="#icon-settings"/>
+                            </svg>
+                            Frigate Configuration
+                        </h3>
+                        <button class="close-modal">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                            Copy and paste this configuration into your Frigate <code>config.yml</code> file:
+                        </p>
+                        <div style="position: relative;">
+                            <pre style="background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 1rem; overflow-x: auto; max-height: 500px; font-size: 0.875rem;"><code id="frigateConfigCode">${this.escapeHtml(data.config)}</code></pre>
+                            <button class="btn btn-sm" id="copyFrigateConfigBtn" 
+                                    style="position: absolute; top: 0.5rem; right: 0.5rem;">
+                                Copy
+                            </button>
+                        </div>
+                        <div style="margin-top: 1rem; padding: 0.75rem; background: rgba(59, 130, 246, 0.1); border-left: 4px solid #3b82f6; border-radius: 4px;">
+                            <strong>Note:</strong> Make sure the RTSP host (<code>${data.rtsp_host}</code>) is accessible from your Frigate container.
+                            If Frigate is in a different Docker network, use the container name or bridge IP.
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary close-modal">Close</button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            modal.style.display = 'flex';
+            
+            // Copy button functionality
+            document.getElementById('copyFrigateConfigBtn')?.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(data.config);
+                    const btn = document.getElementById('copyFrigateConfigBtn');
+                    if (btn) {
+                        btn.textContent = 'Copied!';
+                        setTimeout(() => btn.textContent = 'Copy', 2000);
+                    }
+                } catch (error) {
+                    this.showMessage('Failed to copy to clipboard', 'error');
+                }
+            });
+            
+            // Close modal handlers
+            modal.querySelectorAll('.close-modal').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    modal.remove();
+                });
+            });
+            
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    modal.remove();
+                }
+            });
+            
+        } catch (error) {
+            this.showMessage('Failed to show Frigate config: ' + error.message, 'error');
+        }
+    }
+    
     // Camera/Sync toggle methods
     async toggleCameraSnooze(name, enabled) {
         await this.apiCall(`/api/camera/${encodeURIComponent(name)}/snooze`, { enabled });
+        this.showMessage(`Camera "${name}" ${enabled ? 'snoozed' : 'unsnoozed'}`, 'success');
     }
     
     async toggleCameraArm(name, enabled) {
         await this.apiCall(`/api/camera/${encodeURIComponent(name)}/arm`, { enabled });
+        this.showMessage(`Camera "${name}" ${enabled ? 'armed' : 'disarmed'}`, 'success');
     }
     
     async toggleCameraThumbnail(name, enabled) {
         await this.apiCall(`/api/camera/${encodeURIComponent(name)}/thumbnail`, { enabled });
+        this.showMessage(`Thumbnail updates for "${name}" ${enabled ? 'enabled' : 'disabled'}`, 'success');
     }
     
     async toggleSyncSnooze(name, enabled) {
         await this.apiCall(`/api/sync/${encodeURIComponent(name)}/snooze`, { enabled });
+        this.showMessage(`Sync "${name}" ${enabled ? 'snoozed' : 'unsnoozed'}`, 'success');
     }
     
     async toggleSyncArm(name, enabled) {
         await this.apiCall(`/api/sync/${encodeURIComponent(name)}/arm`, { enabled });
+        this.showMessage(`Sync "${name}" ${enabled ? 'armed' : 'disarmed'}`, 'success');
     }
     
     async apiCall(endpoint, data) {
@@ -1152,7 +2663,7 @@ Are you absolutely sure you want to reset the system?`;
                 throw new Error(errorMsg);
             }
             
-            this.showMessage('Updated successfully', 'success');
+            // Note: Success messages are now handled by the calling function for specificity
             
             // Reload state to show updated values
             await this.loadData();
@@ -1237,6 +2748,19 @@ Are you absolutely sure you want to reset the system?`;
         if (tabIndex === 2 && this.currentCameraName) {
             this.loadCameraClips(this.currentCameraName);
         }
+        
+        // Load stats when Stats tab (index 3) is selected for camera
+        if (tabIndex === 3 && this.currentCameraName) {
+            this.initializeCameraModalCharts();
+            this.loadCameraModalBatteryHistory(this.currentCameraName);
+            this.loadCameraModalStatusHistory(this.currentCameraName);
+        }
+        
+        // Load stats when Stats tab (index 2) is selected for sync module
+        if (tabIndex === 2 && this.currentSyncName && !this.currentCameraName) {
+            this.initializeSyncModalCharts();
+            this.loadSyncModalStatusHistory(this.currentSyncName);
+        }
     }
     
     closeModal(event) {
@@ -1262,15 +2786,15 @@ Are you absolutely sure you want to reset the system?`;
                     </div>
                     <div class="info-row">
                         <div class="info-label">Armed</div>
-                        <div class="info-value">${camera?.arm ? '✓ Yes' : '✗ No'}</div>
+                        <div class="info-value">${camera?.arm ? 'Yes' : 'No'}</div>
                     </div>
                     <div class="info-row">
                         <div class="info-label">Snoozed</div>
-                        <div class="info-value">${camera?.snooze ? '✓ Yes' : '✗ No'}</div>
+                        <div class="info-value">${camera?.snooze ? 'Yes' : 'No'}</div>
                     </div>
                     <div class="info-row">
                         <div class="info-label">Motion</div>
-                        <div class="info-value">${info.enabled === true ? '✓ Enabled' : '✗ Disabled'}</div>
+                        <div class="info-value">${info.enabled === true ? 'Enabled' : 'Disabled'}</div>
                     </div>
                     <div class="info-row">
                         <div class="info-label">Battery</div>
@@ -1307,7 +2831,7 @@ Are you absolutely sure you want to reset the system?`;
                 </div>
             `;
             
-            this.showModal(`📷 ${cameraName}`, content);
+            this.showModal(cameraName, content);
         } catch (error) {
             this.showMessage('Failed to load camera info: ' + error.message, 'error');
         }
@@ -1332,6 +2856,18 @@ Are you absolutely sure you want to reset the system?`;
                 console.warn('Failed to load night vision setting:', e);
             }
             
+            // Fetch BlinkBridge stream info
+            let blinkBridgeStream = null;
+            try {
+                const bbResponse = await fetch('/api/blinkbridge/streams');
+                if (bbResponse.ok) {
+                    const streams = await bbResponse.json();
+                    blinkBridgeStream = streams[cameraName] || null;
+                }
+            } catch (e) {
+                console.warn('Failed to load BlinkBridge stream info:', e);
+            }
+            
             // Get current state
             const camera = this.findCamera(cameraName);
             if (!camera) {
@@ -1348,15 +2884,15 @@ Are you absolutely sure you want to reset the system?`;
                     </div>
                     <div class="info-row">
                         <div class="info-label">Armed</div>
-                        <div class="info-value">${camera.arm ? '✓ Yes' : '✗ No'}</div>
+                        <div class="info-value">${camera.arm ? 'Yes' : 'No'}</div>
                     </div>
                     <div class="info-row">
                         <div class="info-label">Snoozed</div>
-                        <div class="info-value">${camera.snooze ? '✓ Yes' : '✗ No'}</div>
+                        <div class="info-value">${camera.snooze ? 'Yes' : 'No'}</div>
                     </div>
                     <div class="info-row">
                         <div class="info-label">Motion</div>
-                        <div class="info-value">${info.enabled === true ? '✓ Enabled' : '✗ Disabled'}</div>
+                        <div class="info-value">${info.enabled === true ? 'Enabled' : 'Disabled'}</div>
                     </div>
                     <div class="info-row">
                         <div class="info-label">Battery</div>
@@ -1390,6 +2926,23 @@ Are you absolutely sure you want to reset the system?`;
                         <div class="info-label">Network ID</div>
                         <div class="info-value">${info.network_id || 'N/A'}</div>
                     </div>
+                    ${blinkBridgeStream ? `
+                        <div class="info-row" style="background: rgba(59, 130, 246, 0.05); border-top: 2px solid var(--primary);">
+                            <div class="info-label" style="display: flex; align-items: center; gap: 0.25rem;">
+                                📡 RTSP Stream
+                                <span style="font-size: 0.75rem; color: ${blinkBridgeStream.running ? '#22c55e' : '#ef4444'};">
+                                    ${blinkBridgeStream.running ? '● Live' : '● Offline'}
+                                </span>
+                            </div>
+                            <div class="info-value" style="font-family: monospace; font-size: 0.75rem; word-break: break-all;">
+                                ${this.escapeHtml(blinkBridgeStream.rtsp_url)}
+                                <button class="btn btn-sm" onclick="navigator.clipboard.writeText('${blinkBridgeStream.rtsp_url}'); app.showMessage('RTSP URL copied!', 'success');" 
+                                        style="margin-left: 0.5rem; padding: 0.25rem 0.5rem; font-size: 0.75rem;" title="Copy RTSP URL">
+                                    Copy
+                                </button>
+                            </div>
+                        </div>
+                    ` : ''}
                 </div>
             `;
             
@@ -1398,17 +2951,30 @@ Are you absolutely sure you want to reset the system?`;
                 <div>
                     <div class="setting-row" onclick="app.toggleCheckbox('cameraSnooze', event)">
                         <div class="setting-info">
-                            <div class="setting-label">🔕 Snooze Motion</div>
-                            <div class="setting-description">Disable detection for 5 minutes</div>
+                            <div class="setting-label"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-bell-off"/></svg>Snooze Motion</div>
+                            <div class="setting-description">Disable motion detection</div>
                         </div>
                         <label class="toggle" onclick="event.stopPropagation()">
                             <input type="checkbox" id="cameraSnooze" ${camera.snooze ? 'checked' : ''}>
                             <span class="toggle-slider"></span>
                         </label>
                     </div>
+                    <div style="padding: 0.5rem 1rem 1rem 1rem; border-bottom: 1px solid var(--border); background: var(--surface-secondary);">
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                            <label class="form-label" style="font-size: 0.875rem; margin-bottom: 0;">Duration</label>
+                            <select id="cameraSnoozeDuration" class="form-select" style="font-size: 0.875rem;">
+                                <option value="1">1 Hour</option>
+                                <option value="2" selected>2 Hours</option>
+                                <option value="4">4 Hours</option>
+                                <option value="8">8 Hours</option>
+                                <option value="24">24 Hours</option>
+                            </select>
+                            <small style="color: var(--text-secondary); font-size: 0.75rem;">Will auto-unsnooze after this time. Use schedules for indefinite changes.</small>
+                        </div>
+                    </div>
                     <div class="setting-row" onclick="app.toggleCheckbox('cameraArm', event)">
                         <div class="setting-info">
-                            <div class="setting-label">🎯 Arm Camera</div>
+                            <div class="setting-label"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-armed"/></svg>Arm Camera</div>
                             <div class="setting-description">Enable motion detection</div>
                         </div>
                         <label class="toggle" onclick="event.stopPropagation()">
@@ -1416,18 +2982,21 @@ Are you absolutely sure you want to reset the system?`;
                             <span class="toggle-slider"></span>
                         </label>
                     </div>
-                    <div class="setting-row" onclick="app.toggleCheckbox('cameraThumbnail', event)">
-                        <div class="setting-info">
-                            <div class="setting-label">📸 Thumbnails</div>
-                            <div class="setting-description">Capture periodic snapshots</div>
+                    <div style="padding: 0.5rem 1rem 1rem 1rem; border-bottom: 1px solid var(--border); background: var(--surface-secondary);">
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                            <label class="form-label" style="font-size: 0.875rem; margin-bottom: 0;">Duration</label>
+                            <select id="cameraArmDuration" class="form-select" style="font-size: 0.875rem;">
+                                <option value="1">1 Hour</option>
+                                <option value="2" selected>2 Hours</option>
+                                <option value="4">4 Hours</option>
+                                <option value="8">8 Hours</option>
+                                <option value="24">24 Hours</option>
+                            </select>
+                            <small style="color: var(--text-secondary); font-size: 0.75rem;">Will auto-disarm after this time. Use schedules for indefinite changes.</small>
                         </div>
-                        <label class="toggle" onclick="event.stopPropagation()">
-                            <input type="checkbox" id="cameraThumbnail" ${camera.thumbnail ? 'checked' : ''}>
-                            <span class="toggle-slider"></span>
-                        </label>
                     </div>
                     <div style="padding: 1rem 0.5rem; border-bottom: 1px solid var(--border);">
-                        <div class="setting-label" style="margin-bottom: 0.5rem;">🌙 Night Vision</div>
+                        <div class="setting-label" style="margin-bottom: 0.5rem;"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-snoozed"/></svg>Night Vision</div>
                         <select id="cameraNightVision" class="form-input" style="width: 100%;">
                             <option value="auto" ${nightVisionMode === 'auto' ? 'selected' : ''}>Auto</option>
                             <option value="on" ${nightVisionMode === 'on' ? 'selected' : ''}>Always On</option>
@@ -1435,13 +3004,13 @@ Are you absolutely sure you want to reset the system?`;
                         </select>
                     </div>
                     <div style="padding: 1rem 0.5rem;">
-                        <div class="setting-label" style="margin-bottom: 0.75rem;">📹 Quick Actions</div>
+                        <div class="setting-label" style="margin-bottom: 0.75rem;">Actions</div>
                         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                            <button class="btn btn-secondary" onclick="app.captureNewThumbnail('${this.escapeHtml(camera.name)}')" style="flex: 1; min-width: 140px;">
-                                📸 Take Snapshot
+                            <button class="btn btn-secondary" onclick="app.captureNewThumbnail('${this.escapeHtml(camera.name)}')" style="flex: 1; min-width: 140px;" title="Capture a new thumbnail image from the camera">
+                                <svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-photo"/></svg>Take Snapshot
                             </button>
-                            <button class="btn btn-secondary" onclick="app.startRecording('${this.escapeHtml(camera.name)}')" style="flex: 1; min-width: 140px;">
-                                🎬 Start Recording
+                            <button class="btn btn-secondary" onclick="app.startRecording('${this.escapeHtml(camera.name)}')" style="flex: 1; min-width: 140px;" title="Record a new video clip">
+                                <svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-video"/></svg>Start Recording
                             </button>
                         </div>
                     </div>
@@ -1452,8 +3021,8 @@ Are you absolutely sure you want to reset the system?`;
             const mediaContent = `
                 <div class="media-content">
                     <div class="media-subtabs">
-                        <button class="media-subtab active" onclick="app.switchMediaTab('${this.escapeHtml(cameraName)}', 'clips', event)">🎬 Clips</button>
-                        <button class="media-subtab" onclick="app.switchMediaTab('${this.escapeHtml(cameraName)}', 'thumbnails', event)">📸 Thumbnails</button>
+                        <button class="media-subtab active" onclick="app.switchMediaTab('${this.escapeHtml(cameraName)}', 'clips', event)"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-video"/></svg>Clips</button>
+                        <button class="media-subtab" onclick="app.switchMediaTab('${this.escapeHtml(cameraName)}', 'thumbnails', event)"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-photo"/></svg>Thumbnails</button>
                     </div>
                     <div class="media-subtab-content">
                         <div id="mediaClipsTab" class="media-tab-panel active">
@@ -1466,10 +3035,94 @@ Are you absolutely sure you want to reset the system?`;
                 </div>
             `;
             
+            // Stats tab content
+            const statsContent = `
+                <div style="padding: 1rem;">
+                    <div style="margin-bottom: 1.5rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <div style="font-weight: 600; font-size: 1.1rem;"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-battery"/></svg>Battery History</div>
+                            <button class="btn btn-secondary" onclick="app.downloadCameraModalBatteryCSV()" style="padding: 0.5rem 1rem; font-size: 0.875rem;">
+                                <svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-download"/></svg>CSV
+                            </button>
+                        </div>
+                        <div style="margin-bottom: 0.75rem;">
+                            <label class="form-label" style="font-size: 0.875rem;">Time Range</label>
+                            <select id="modalBatteryTimeRange" class="form-select" onchange="app.loadCameraModalBatteryHistory('${this.escapeHtml(cameraName)}')">
+                                <option value="24">Last 24 Hours</option>
+                                <option value="168">Last 7 Days</option>
+                                <option value="720" selected>Last 30 Days</option>
+                                <option value="2160">Last 90 Days</option>
+                            </select>
+                        </div>
+                        <div style="background: var(--surface); padding: 1rem; border-radius: 8px; height: 250px;">
+                            <canvas id="modalBatteryChart"></canvas>
+                        </div>
+                        <div id="modalBatteryTimeScale" style="text-align: center; margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-secondary);"></div>
+                        <div id="modalBatteryStats" style="margin-top: 1rem; display: none;">
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem;">
+                                <div style="text-align: center;">
+                                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Average</div>
+                                    <div id="modalAvgVoltage" style="font-size: 1.1rem; font-weight: 600; color: var(--primary);">-</div>
+                                </div>
+                                <div style="text-align: center;">
+                                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Min</div>
+                                    <div id="modalMinVoltage" style="font-size: 1.1rem; font-weight: 600; color: var(--error);">-</div>
+                                </div>
+                                <div style="text-align: center;">
+                                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Max</div>
+                                    <div id="modalMaxVoltage" style="font-size: 1.1rem; font-weight: 600; color: var(--success);">-</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-bottom: 1.5rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <div style="font-weight: 600; font-size: 1.1rem;"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-signal"/></svg>Status History</div>
+                            <button class="btn btn-secondary" onclick="app.downloadCameraModalStatusCSV()" style="padding: 0.5rem 1rem; font-size: 0.875rem;">
+                                <svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-download"/></svg>CSV
+                            </button>
+                        </div>
+                        <div style="margin-bottom: 0.75rem;">
+                            <label class="form-label" style="font-size: 0.875rem;">Time Range</label>
+                            <select id="modalStatusTimeRange" class="form-select" onchange="app.loadCameraModalStatusHistory('${this.escapeHtml(cameraName)}')">
+                                <option value="24">Last 24 Hours</option>
+                                <option value="168">Last 7 Days</option>
+                                <option value="720" selected>Last 30 Days</option>
+                                <option value="2160">Last 90 Days</option>
+                            </select>
+                        </div>
+                        <div style="background: var(--surface); padding: 1rem; border-radius: 8px; height: 250px;">
+                            <canvas id="modalStatusChart"></canvas>
+                        </div>
+                        <div id="modalStatusTimeScale" style="text-align: center; margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-secondary);"></div>
+                        <div id="modalStatusStats" style="margin-top: 1rem; display: none;">
+                            <div style="background: var(--surface-secondary); padding: 1rem; border-radius: 8px;">
+                                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem;">
+                                    <div style="text-align: center;">
+                                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Uptime</div>
+                                        <div id="modalUptimePercent" style="font-size: 1.3rem; font-weight: 600; color: var(--success);">-</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Online</div>
+                                        <div id="modalOnlineTime" style="font-size: 1.1rem; font-weight: 600; color: var(--primary);">-</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Offline</div>
+                                        <div id="modalOfflineTime" style="font-size: 1.1rem; font-weight: 600; color: var(--error);">-</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
             const tabs = [
-                { title: 'ℹ️ Info', content: infoContent },
-                { title: '⚙️ Settings', content: settingsContent },
-                { title: '📁 Media', content: mediaContent }
+                { title: 'Info', content: infoContent },
+                { title: 'Settings', content: settingsContent },
+                { title: 'Media', content: mediaContent },
+                { title: 'Stats', content: statsContent }
             ];
             
             const footer = `
@@ -1477,7 +3130,7 @@ Are you absolutely sure you want to reset the system?`;
                 <button class="btn" onclick="app.saveCameraSettings('${this.escapeHtml(cameraName)}')">Save Settings</button>
             `;
             
-            this.showTabbedModal(`📷 ${cameraName}`, tabs, footer);
+            this.showTabbedModal(cameraName, tabs, footer);
             
             // Store camera name for media tab loading
             this.currentCameraName = cameraName;
@@ -1497,7 +3150,7 @@ Are you absolutely sure you want to reset the system?`;
             <div>
                 <div class="setting-row">
                     <div class="setting-info">
-                        <div class="setting-label">🔕 Snooze Motion</div>
+                        <div class="setting-label"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-bell-off"/></svg>Snooze Motion</div>
                         <div class="setting-description">Disable detection for 5 minutes</div>
                     </div>
                     <label class="toggle">
@@ -1507,7 +3160,7 @@ Are you absolutely sure you want to reset the system?`;
                 </div>
                 <div class="setting-row">
                     <div class="setting-info">
-                        <div class="setting-label">🎯 Arm Camera</div>
+                        <div class="setting-label"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-armed"/></svg>Arm Camera</div>
                         <div class="setting-description">Enable motion detection</div>
                     </div>
                     <label class="toggle">
@@ -1517,7 +3170,7 @@ Are you absolutely sure you want to reset the system?`;
                 </div>
                 <div class="setting-row">
                     <div class="setting-info">
-                        <div class="setting-label">📸 Thumbnails</div>
+                        <div class="setting-label"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-photo"/></svg>Thumbnails</div>
                         <div class="setting-description">Capture periodic snapshots</div>
                     </div>
                     <label class="toggle">
@@ -1533,36 +3186,38 @@ Are you absolutely sure you want to reset the system?`;
             <button class="btn" onclick="app.saveCameraSettings('${this.escapeHtml(cameraName)}')">Save Settings</button>
         `;
         
-        this.showModal(`⚙️ ${cameraName} Settings`, content, footer);
+        this.showModal(`${cameraName} Settings`, content, footer);
     }
     
     async saveCameraSettings(cameraName) {
         const snooze = document.getElementById('cameraSnooze').checked;
         const arm = document.getElementById('cameraArm').checked;
-        const thumbnail = document.getElementById('cameraThumbnail').checked;
         const nightVision = document.getElementById('cameraNightVision').value;
+        const snoozeDuration = parseFloat(document.getElementById('cameraSnoozeDuration').value);
+        const armDuration = parseFloat(document.getElementById('cameraArmDuration').value);
         
         this.closeModal();
         this.showMessage('Saving camera settings...', 'info');
         
         try {
-            // Apply all settings without showing individual messages
+            // Apply snooze with duration (always has a duration now)
             await fetch(`/api/camera/${encodeURIComponent(cameraName)}/snooze`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: snooze })
+                body: JSON.stringify({ 
+                    enabled: snooze,
+                    duration_hours: snooze ? snoozeDuration : null
+                })
             });
             
+            // Apply arm with duration (always has a duration now)
             await fetch(`/api/camera/${encodeURIComponent(cameraName)}/arm`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: arm })
-            });
-            
-            await fetch(`/api/camera/${encodeURIComponent(cameraName)}/thumbnail`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: thumbnail })
+                body: JSON.stringify({ 
+                    enabled: arm,
+                    duration_hours: arm ? armDuration : null
+                })
             });
             
             await fetch(`/api/camera/${encodeURIComponent(cameraName)}/night_vision`, {
@@ -1572,7 +3227,16 @@ Are you absolutely sure you want to reset the system?`;
             });
             
             await this.loadData();
-            this.showMessage('Camera settings saved successfully', 'success');
+            
+            // Show message with duration info
+            let message = 'Camera settings saved';
+            if (snooze) {
+                message += ` (snoozed for ${snoozeDuration}h)`;
+            }
+            if (arm) {
+                message += ` (armed for ${armDuration}h)`;
+            }
+            this.showMessage(message, 'success');
         } catch (error) {
             this.showMessage('Failed to save camera settings: ' + error.message, 'error');
         }
@@ -1720,10 +3384,10 @@ Are you absolutely sure you want to reset the system?`;
         
         const footer = `
             <button class="btn btn-secondary" onclick="app.closeModal()">Close</button>
-            <a href="${this.escapeHtml(path)}" download="${this.escapeHtml(filename)}" class="btn">⬇️ Download</a>
+            <a href="${this.escapeHtml(path)}" download="${this.escapeHtml(filename)}" class="btn"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-download"/></svg>Download</a>
         `;
         
-        this.showModal(`${type === 'video' ? '🎬' : '📸'} ${displayTitle}`, content, footer);
+        this.showModal(displayTitle, content, footer);
     }
     
     formatFileSize(bytes) {
@@ -1798,11 +3462,11 @@ Are you absolutely sure you want to reset the system?`;
             <div class="info-grid">
                 <div class="info-row">
                     <div class="info-label">Armed</div>
-                    <div class="info-value">${sync.arm ? '✓ Yes' : '✗ No'}</div>
+                    <div class="info-value">${sync.arm ? 'Yes' : 'No'}</div>
                 </div>
                 <div class="info-row">
                     <div class="info-label">Snoozed</div>
-                    <div class="info-value">${sync.snooze ? '✓ Yes' : '✗ No'}</div>
+                    <div class="info-value">${sync.snooze ? 'Yes' : 'No'}</div>
                 </div>
                 <div class="info-row">
                     <div class="info-label">Cameras</div>
@@ -1830,11 +3494,11 @@ Are you absolutely sure you want to reset the system?`;
             <div class="info-grid">
                 <div class="info-row">
                     <div class="info-label">Armed</div>
-                    <div class="info-value">${sync.arm ? '✓ Yes' : '✗ No'}</div>
+                    <div class="info-value">${sync.arm ? 'Yes' : 'No'}</div>
                 </div>
                 <div class="info-row">
                     <div class="info-label">Snoozed</div>
-                    <div class="info-value">${sync.snooze ? '✓ Yes' : '✗ No'}</div>
+                    <div class="info-value">${sync.snooze ? 'Yes' : 'No'}</div>
                 </div>
                 <div class="info-row">
                     <div class="info-label">Cameras</div>
@@ -1852,17 +3516,30 @@ Are you absolutely sure you want to reset the system?`;
             <div>
                 <div class="setting-row" onclick="app.toggleCheckbox('syncSnooze', event)">
                     <div class="setting-info">
-                        <div class="setting-label">🔕 Snooze All</div>
-                        <div class="setting-description">Disable all cameras for 4 minutes</div>
+                        <div class="setting-label"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-bell-off"/></svg>Snooze All</div>
+                        <div class="setting-description">Disable all cameras</div>
                     </div>
                     <label class="toggle" onclick="event.stopPropagation()">
                         <input type="checkbox" id="syncSnooze" ${sync.snooze ? 'checked' : ''}>
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
+                <div style="padding: 0.5rem 1rem 1rem 1rem; border-bottom: 1px solid var(--border); background: var(--surface-secondary);">
+                    <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                        <label class="form-label" style="font-size: 0.875rem; margin-bottom: 0;">Duration</label>
+                        <select id="syncSnoozeDuration" class="form-select" style="font-size: 0.875rem;">
+                            <option value="1">1 Hour</option>
+                            <option value="2" selected>2 Hours</option>
+                            <option value="4">4 Hours</option>
+                            <option value="8">8 Hours</option>
+                            <option value="24">24 Hours</option>
+                        </select>
+                        <small style="color: var(--text-secondary); font-size: 0.75rem;">Will auto-unsnooze all cameras after this time. Use schedules for indefinite changes.</small>
+                    </div>
+                </div>
                 <div class="setting-row" onclick="app.toggleCheckbox('syncArm', event)">
                     <div class="setting-info">
-                        <div class="setting-label">🎯 Arm All</div>
+                        <div class="setting-label"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-armed"/></svg>Arm All</div>
                         <div class="setting-description">Enable all cameras</div>
                     </div>
                     <label class="toggle" onclick="event.stopPropagation()">
@@ -1870,12 +3547,71 @@ Are you absolutely sure you want to reset the system?`;
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
+                <div style="padding: 0.5rem 1rem 1rem 1rem; border-bottom: 1px solid var(--border); background: var(--surface-secondary);">
+                    <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                        <label class="form-label" style="font-size: 0.875rem; margin-bottom: 0;">Duration</label>
+                        <select id="syncArmDuration" class="form-select" style="font-size: 0.875rem;">
+                            <option value="1">1 Hour</option>
+                            <option value="2" selected>2 Hours</option>
+                            <option value="4">4 Hours</option>
+                            <option value="8">8 Hours</option>
+                            <option value="24">24 Hours</option>
+                        </select>
+                        <small style="color: var(--text-secondary); font-size: 0.75rem;">Will auto-disarm all cameras after this time. Use schedules for indefinite changes.</small>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // Stats tab content (uptime only, no battery for sync modules)
+        const statsContent = `
+            <div style="padding: 1rem;">
+                <div style="margin-bottom: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <div style="font-weight: 600; font-size: 1.1rem;"><svg class="icon" style="margin-right: 0.5rem;"><use href="#icon-signal"/></svg>Uptime History</div>
+                        <button class="btn btn-secondary" onclick="app.downloadSyncModalStatusCSV()" style="padding: 0.5rem 1rem; font-size: 0.875rem;">
+                            <svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-download"/></svg>CSV
+                        </button>
+                    </div>
+                    <div style="margin-bottom: 0.75rem;">
+                        <label class="form-label" style="font-size: 0.875rem;">Time Range</label>
+                        <select id="modalSyncStatusTimeRange" class="form-select" onchange="app.loadSyncModalStatusHistory('${this.escapeHtml(syncName)}')">
+                            <option value="24">Last 24 Hours</option>
+                            <option value="168">Last 7 Days</option>
+                            <option value="720" selected>Last 30 Days</option>
+                            <option value="2160">Last 90 Days</option>
+                        </select>
+                    </div>
+                    <div style="background: var(--surface); padding: 1rem; border-radius: 8px; height: 250px;">
+                        <canvas id="modalSyncStatusChart"></canvas>
+                    </div>
+                    <div id="modalSyncStatusTimeScale" style="text-align: center; margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-secondary);"></div>
+                    <div id="modalSyncStatusStats" style="margin-top: 1rem; display: none;">
+                        <div style="background: var(--surface-secondary); padding: 1rem; border-radius: 8px;">
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem;">
+                                <div style="text-align: center;">
+                                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Uptime</div>
+                                    <div id="modalSyncUptimePercent" style="font-size: 1.3rem; font-weight: 600; color: var(--success);">-</div>
+                                </div>
+                                <div style="text-align: center;">
+                                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Online</div>
+                                    <div id="modalSyncOnlineTime" style="font-size: 1.1rem; font-weight: 600; color: var(--primary);">-</div>
+                                </div>
+                                <div style="text-align: center;">
+                                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Offline</div>
+                                    <div id="modalSyncOfflineTime" style="font-size: 1.1rem; font-weight: 600; color: var(--error);">-</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         `;
         
         const tabs = [
-            { title: 'ℹ️ Info', content: infoContent },
-            { title: '⚙️ Settings', content: settingsContent }
+            { title: 'Info', content: infoContent },
+            { title: 'Settings', content: settingsContent },
+            { title: 'Stats', content: statsContent }
         ];
         
         const footer = `
@@ -1883,7 +3619,11 @@ Are you absolutely sure you want to reset the system?`;
             <button class="btn" onclick="app.saveSyncSettings('${this.escapeHtml(syncName)}')">Save Settings</button>
         `;
         
-        this.showTabbedModal(`🔗 ${syncName}`, tabs, footer);
+        this.showTabbedModal(syncName, tabs, footer);
+        
+        // Store sync name for stats tab loading
+        this.currentSyncName = syncName;
+        this.currentCameraName = null; // Clear camera name to indicate this is a sync modal
     }
     
     async showSyncSettings(syncName) {
@@ -1897,7 +3637,7 @@ Are you absolutely sure you want to reset the system?`;
             <div>
                 <div class="setting-row">
                     <div class="setting-info">
-                        <div class="setting-label">🔕 Snooze All</div>
+                        <div class="setting-label"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-bell-off"/></svg>Snooze All</div>
                         <div class="setting-description">Disable all cameras for 4 minutes</div>
                     </div>
                     <label class="toggle">
@@ -1907,7 +3647,7 @@ Are you absolutely sure you want to reset the system?`;
                 </div>
                 <div class="setting-row">
                     <div class="setting-info">
-                        <div class="setting-label">🎯 Arm All</div>
+                        <div class="setting-label"><svg class="icon-sm" style="margin-right: 0.5rem;"><use href="#icon-armed"/></svg>Arm All</div>
                         <div class="setting-description">Enable all cameras</div>
                     </div>
                     <label class="toggle">
@@ -1923,35 +3663,152 @@ Are you absolutely sure you want to reset the system?`;
             <button class="btn" onclick="app.saveSyncSettings('${this.escapeHtml(syncName)}')">Save Settings</button>
         `;
         
-        this.showModal(`⚙️ ${syncName} Settings`, content, footer);
+        this.showModal(`${syncName} Settings`, content, footer);
     }
     
     async saveSyncSettings(syncName) {
         const snooze = document.getElementById('syncSnooze').checked;
         const arm = document.getElementById('syncArm').checked;
+        const snoozeDuration = parseFloat(document.getElementById('syncSnoozeDuration').value);
+        const armDuration = parseFloat(document.getElementById('syncArmDuration').value);
         
         this.closeModal();
         this.showMessage('Saving sync module settings...', 'info');
         
         try {
-            // Apply settings without showing individual messages
+            // Apply snooze with duration (always has a duration now)
             await fetch(`/api/sync/${encodeURIComponent(syncName)}/snooze`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: snooze })
+                body: JSON.stringify({ 
+                    enabled: snooze,
+                    duration_hours: snooze ? snoozeDuration : null
+                })
             });
             
+            // Apply arm with duration (always has a duration now)
             await fetch(`/api/sync/${encodeURIComponent(syncName)}/arm`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: arm })
+                body: JSON.stringify({ 
+                    enabled: arm,
+                    duration_hours: arm ? armDuration : null
+                })
             });
             
             await this.loadData();
-            this.showMessage('Sync module settings saved successfully', 'success');
+            
+            // Show message with duration info
+            let message = 'Sync module settings saved';
+            if (snooze) {
+                message += ` (snoozed for ${snoozeDuration}h)`;
+            }
+            if (arm) {
+                message += ` (armed for ${armDuration}h)`;
+            }
+            this.showMessage(message, 'success');
         } catch (error) {
             this.showMessage('Failed to save sync settings: ' + error.message, 'error');
         }
+    }
+    
+    async loadSyncModalStatusHistory(syncName) {
+        const hours = document.getElementById('modalSyncStatusTimeRange').value;
+        
+        if (!syncName) {
+            return;
+        }
+        
+        try {
+            const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+            const response = await fetch(`/api/history/status/${encodeURIComponent(syncName)}?since=${encodeURIComponent(since)}`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to load status history');
+            }
+            
+            const data = await response.json();
+            const history = data.history || [];
+            
+            // Store for CSV export
+            this.currentSyncModalStatusData = history;
+            
+            if (history.length === 0) {
+                document.getElementById('modalSyncStatusTimeScale').textContent = 'No data available';
+                return;
+            }
+            
+            // Update chart with relative time labels
+            const labels = history.map(h => {
+                const date = new Date(h.timestamp);
+                return this.formatRelativeTime(date, parseInt(hours));
+            });
+            const statusValues = history.map(h => h.is_online ? 1 : 0);
+            
+            this.syncModalStatusChart.data.labels = labels;
+            this.syncModalStatusChart.data.datasets[0].data = statusValues;
+            this.syncModalStatusChart.update();
+            
+            // Update time scale indicator
+            this.updateTimeScaleModal('modalSyncStatusTimeScale', history, parseInt(hours));
+            
+            // Load and display stats
+            await this.loadSyncModalStatusStats(syncName, hours);
+            
+        } catch (error) {
+            this.showMessage('Failed to load status history: ' + error.message, 'error');
+        }
+    }
+    
+    async loadSyncModalStatusStats(syncName, hours) {
+        try {
+            const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+            const response = await fetch(`/api/history/status/${encodeURIComponent(syncName)}/stats?since=${encodeURIComponent(since)}`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to load status stats');
+            }
+            
+            const stats = await response.json();
+            
+            document.getElementById('modalSyncUptimePercent').textContent = stats.uptime_percentage.toFixed(1) + '%';
+            document.getElementById('modalSyncOnlineTime').textContent = this.formatDuration(stats.total_online_minutes);
+            document.getElementById('modalSyncOfflineTime').textContent = this.formatDuration(stats.total_offline_minutes);
+            document.getElementById('modalSyncStatusStats').style.display = 'block';
+            
+        } catch (error) {
+            console.error('Failed to load status stats:', error);
+        }
+    }
+    
+    downloadSyncModalStatusCSV() {
+        if (!this.currentSyncModalStatusData || this.currentSyncModalStatusData.length === 0) {
+            this.showMessage('No data to download', 'error');
+            return;
+        }
+        
+        // Create CSV content
+        let csv = 'Timestamp,Status,Signal Strength,Temperature\n';
+        this.currentSyncModalStatusData.forEach(row => {
+            const timestamp = new Date(row.timestamp).toISOString();
+            const status = row.is_online ? 'Online' : 'Offline';
+            const signal = row.signal_strength || 'N/A';
+            const temp = row.temperature || 'N/A';
+            csv += `${timestamp},${status},${signal},${temp}\n`;
+        });
+        
+        // Create download link
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `sync-status-history-${Date.now()}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        
+        this.showMessage('CSV downloaded successfully', 'success');
     }
     
     findCamera(cameraName) {
@@ -2205,6 +4062,8 @@ Are you absolutely sure you want to reset the system?`;
             
             if (response.ok) {
                 this.showMessage('Recording started! Video will be available in clips shortly.', 'success');
+                // Refresh state to show updated data
+                await this.loadData();
             } else {
                 const error = await response.json();
                 this.showMessage('Failed to start recording: ' + (error.error || 'Unknown error'), 'error');
@@ -2215,7 +4074,6 @@ Are you absolutely sure you want to reset the system?`;
             this.hideLoading();
         }
     }
-    
     
     // Loading Overlay
     showLoading(message = 'Processing...') {

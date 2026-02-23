@@ -9,6 +9,8 @@ This package contains modular components for the MyBlink application:
 - voipms_handler: VoIP.ms 2FA integration
 - blink_handler: Blink camera operations
 - auth: Authentication and authorization
+- db_models: Database models for historical data
+- history_manager: Database operations for time-series data
 """
 
 from .models import (
@@ -35,6 +37,17 @@ from .auth import (
     AuthManager,
     User,
 )
+from .db_models import (
+    ScheduleAction,
+    ScheduleTarget,
+    CameraStatus,
+    ScheduledRule,
+    BatteryRecord,
+    StatusRecord,
+    MediaDownloadRecord,
+)
+from .history_manager import HistoryManager
+from .schedule_executor import ScheduleExecutor
 
 __all__ = [
     # Models
@@ -59,4 +72,14 @@ __all__ = [
     "OIDCConfig",
     "AuthManager",
     "User",
+    # Database models
+    "ScheduleAction",
+    "ScheduleTarget",
+    "CameraStatus",
+    "ScheduledRule",
+    "BatteryRecord",
+    "StatusRecord",
+    "MediaDownloadRecord",
+    "HistoryManager",
+    "ScheduleExecutor",
 ]

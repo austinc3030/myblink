@@ -1,10 +1,18 @@
+FROM bluenviron/mediamtx:1 AS mediamtx
+
 FROM python:3.12-slim
 
 # Set working directory inside the container
 WORKDIR /app
 
+# Copy MediaMTX binary from official image
+COPY --from=mediamtx /mediamtx /usr/local/bin/mediamtx
+
 # Install system dependencies
-RUN apt-get update && apt-get install -y git ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    git \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy app directory contents
 COPY app/ /app/

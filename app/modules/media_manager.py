@@ -76,17 +76,19 @@ class MediaDownloadConfig:
 class MediaManager:
     """Manages automatic downloading and retention of Blink media."""
     
-    def __init__(self, blink_handler, config: MediaDownloadConfig, logger: Optional[logging.Logger] = None):
+    def __init__(self, blink_handler, config: MediaDownloadConfig, history_manager=None, logger: Optional[logging.Logger] = None):
         """
         Initialize media manager.
         
         Args:
             blink_handler: BlinkHandler instance for API access
             config: MediaDownloadConfig instance
+            history_manager: HistoryManager instance for database tracking
             logger: Logger instance
         """
         self.blink_handler = blink_handler
         self.config = config
+        self.history_manager = history_manager
         self.logger = logger or logging.getLogger(__name__)
         self.tracking_file = Path("/app/media_tracking.json")
         self.downloaded_clips: Dict[str, Set[str]] = {}  # camera_name -> set of clip IDs
@@ -99,19 +101,40 @@ class MediaManager:
         self._load_tracking()
     
     def _load_tracking(self) -> None:
-        """Load tracking data from file."""
+        """Load tracking data from file and database."""
         try:
+            # First, try loading from database if available
+            if self.history_manager:
+                try:
+                    # Get all media downloads from database
+                    media_history = self.history_manager.get_all_media_downloads()
+                    
+                    # Build downloaded clips set from database records
+                    self.downloaded_clips = {}
+                    for record in media_history:
+                        if record.media_type == 'clip':
+                            if record.camera_name not in self.downloaded_clips:
+                                self.downloaded_clips[record.camera_name] = set()
+                            self.downloaded_clips[record.camera_name].add(record.media_id)
+                        elif record.media_type == 'thumbnail':
+                            self.downloaded_thumbnails[record.camera_name] = record.media_id
+                    
+                    self.logger.info(f"Loaded tracking data from database: {len(self.downloaded_clips)} cameras tracked")
+                except Exception as db_error:
+                    self.logger.warning(f"Failed to load from database, falling back to JSON: {db_error}")
+            
+            # Fall back to JSON file if database not available or failed
             if self.tracking_file.exists():
                 with open(self.tracking_file, 'r') as f:
                     data = json.load(f)
-                    # Convert lists back to sets
-                    self.downloaded_clips = {k: set(v) for k, v in data.get("clips", {}).items()}
-                    self.downloaded_thumbnails = data.get("thumbnails", {})
+                    # Only load if not already loaded from database
+                    if not self.downloaded_clips:
+                        self.downloaded_clips = {k: set(v) for k, v in data.get("clips", {}).items()}
+                    if not self.downloaded_thumbnails:
+                        self.downloaded_thumbnails = data.get("thumbnails", {})
                     self.download_start_time = data.get("download_start_time")
                     self.last_check_time = data.get("last_check_time")
-                self.logger.info(f"Loaded tracking data: {len(self.downloaded_clips)} cameras tracked")
-                if self.last_check_time:
-                    self.logger.info(f"Last check was at {self.last_check_time}")
+                self.logger.info(f"Loaded tracking data from JSON file")
         except Exception as e:
             self.logger.warning(f"Failed to load tracking data: {e}")
             self.downloaded_clips = {}
@@ -262,6 +285,22 @@ class MediaManager:
                     
                     self.logger.info(f"Downloaded clip {clip_id} for {camera_name}")
                     
+                    # Record in database if history manager is available
+                    if self.history_manager:
+                        try:
+                            file_size = file_path.stat().st_size
+                            self.history_manager.record_media_download(
+                                camera_name=camera_name,
+                                sync_name=sync_name,
+                                media_type='clip',
+                                media_id=clip_id,
+                                file_path=str(file_path),
+                                file_size_bytes=file_size,
+                                created_at=created_at
+                            )
+                        except Exception as db_error:
+                            self.logger.warning(f"Failed to record clip download in database: {db_error}")
+                    
                     # Generate thumbnail from video
                     try:
                         await self._generate_video_thumbnail(file_path)
@@ -319,6 +358,22 @@ class MediaManager:
                         f.write(thumbnail_data)
                     
                     self.logger.info(f"Downloaded thumbnail for {camera_name}")
+                    
+                    # Record in database if history manager is available  
+                    if self.history_manager:
+                        try:
+                            file_size = file_path.stat().st_size
+                            self.history_manager.record_media_download(
+                                camera_name=camera_name,
+                                sync_name=sync_name,
+                                media_type='thumbnail',
+                                media_id=timestamp,
+                                file_path=str(file_path),
+                                file_size_bytes=file_size
+                            )
+                        except Exception as db_error:
+                            self.logger.warning(f"Failed to record thumbnail download in database: {db_error}")
+                    
                     return file_path
             
             return None

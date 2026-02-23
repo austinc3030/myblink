@@ -3,4 +3,7 @@
 	url = https://github.com/dynacylabs/blinkpy.git
 [submodule "python-voipms"]
 	path = app/python-voipms
-	url = https://github.com/dynacylabs/python-voipms
+	url = https://github.com/dynacylabs/python-voipms.git
+[submodule "blinkbridge"]
+	path = blinkbridge
+	url = https://github.com/roger-/blinkbridge.git

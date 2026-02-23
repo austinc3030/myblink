@@ -33,7 +33,7 @@ A comprehensive, web-based management system for Blink security cameras with aut
 - 🔒 **Automatic 2FA Authentication**: Seamless VoIP.ms SMS integration for Blink 2FA codes
 - 🔐 **Multi-Auth Support**: Optional basic authentication or enterprise OIDC/SSO (Google, GitHub, Okta, etc.)
 - 📸 **Complete Camera Control**: Full access to every Blink camera feature
-- 🔄 **Scheduled Operations**: Automated thumbnail updates, camera arming, and motion detection management
+- 🔄 **Advanced Scheduling System**: Create flexible automated rules with interval-based execution, time windows, day restrictions, and auto-disable timers
 - 💪 **Resilient & Self-Healing**: Auto-retry with intelligent error recovery and reinitialization
 - 🏥 **Advanced Health Monitoring**: Production-ready Docker healthcheck with active status validation
 
@@ -48,6 +48,15 @@ A comprehensive, web-based management system for Blink security cameras with aut
   - 📸 One-click photo capture
   - 🎥 Instant video recording
   - ℹ️ Detailed info modal with complete camera data
+- 📅 **Schedule Management**:
+  - Intuitive schedule creation interface
+  - Run actions every X hours/minutes
+  - Execute at specific minute of each hour
+  - Time window restrictions (e.g., only 9 PM - 6 AM)
+  - Day-of-week filtering
+  - Auto-disable after duration
+  - Pause/resume schedules
+  - Real-time next-run display
 - 📹 **Media Management**:
   - View and download cached thumbnails
   - Capture new photos on-demand
@@ -531,7 +540,95 @@ curl -X POST http://localhost:8080/api/sync/Sync%20Module/arm \
   -d '{"enabled": true}'
 ```
 
-### 🔐 Authenticated Requests
+### � Schedule Management Endpoints
+
+The schedule management system allows you to create automated rules that run at specified intervals with flexible time restrictions.
+
+```
+GET    /api/schedules              # List all scheduled rules
+POST   /api/schedules              # Create a new schedule
+PUT    /api/schedules/<id>         # Update existing schedule
+DELETE /api/schedules/<id>         # Delete a schedule
+GET    /api/history/battery        # Get battery level history
+GET    /api/history/status         # Get camera online/offline status history
+GET    /api/history/media          # Get media download history
+```
+
+#### Create Schedule Example
+
+Create a schedule to enable motion detection every 4 hours for 4 hours:
+
+```bash
+curl -X POST http://localhost:8080/api/schedules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rule_name": "Barn Driveway Motion",
+    "rule_type": "CAMERA_MOTION",
+    "target_id": "Front Door",
+    "action": "enable",
+    "enabled": true,
+    "interval_hours": 4,
+    "interval_minutes": 0,
+    "duration_hours": 4,
+    "start_minute": 0
+  }'
+```
+
+#### Schedule at Specific Minute Example
+
+Run a thumbnail capture at 27 minutes past each hour:
+
+```bash
+curl -X POST http://localhost:8080/api/schedules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rule_name": "Hourly Thumbnail",
+    "rule_type": "CAMERA_THUMBNAIL",
+    "target_id": "Front Door",
+    "action": "capture",
+    "enabled": true,
+    "interval_hours": 1,
+    "interval_minutes": 0,
+    "start_minute": 27
+  }'
+```
+
+#### Schedule with Time Window
+
+Only arm cameras between 9 PM and 6 AM on weekdays:
+
+```bash
+curl -X POST http://localhost:8080/api/schedules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rule_name": "Nighttime Armed",
+    "rule_type": "SYNC_ARM",
+    "target_id": "Home",
+    "action": "arm",
+    "enabled": true,
+    "interval_hours": 1,
+    "interval_minutes": 0,
+    "start_time": "21:00",
+    "end_time": "06:00",
+    "days_of_week": "mon,tue,wed,thu,fri"
+  }'
+```
+
+**Schedule Fields:**
+- `rule_name` - Descriptive name for the schedule
+- `rule_type` - Action type: `CAMERA_MOTION`, `CAMERA_THUMBNAIL`, `SYNC_ARM`, `SYNC_DISARM`
+- `target_id` - Camera or sync module name
+- `action` - Specific action: `enable`, `disable`, `capture`, `arm`, `disarm`
+- `enabled` - Whether the schedule is active
+- `interval_hours` - Hours between runs (0-24)
+- `interval_minutes` - Minutes between runs (0-59)
+- `start_minute` - Optional: Run at specific minute (0-59)
+- `duration_hours` - Optional: Auto-disable after this many hours
+- `start_time` - Optional: Only run after this time (HH:MM)
+- `end_time` - Optional: Only run before this time (HH:MM)
+- `days_of_week` - Optional: Comma-separated days (mon,tue,wed,thu,fri,sat,sun)
+
+### �🔐 Authenticated Requests
 
 When authentication is enabled, include credentials:
 

@@ -95,9 +95,17 @@ class MyBlink:
         self.voipms_handler: Optional[VoipMsHandler] = None
         self.blink_handler: Optional[BlinkHandler] = None
         self.media_manager: Optional[Any] = None
+        self.history_manager: Optional[Any] = None
+        self.schedule_executor: Optional[Any] = None
+        self.blinkbridge_manager: Optional[Any] = None
+        
+        # Always initialize history manager (even if not fully configured)
+        self._initialize_history_manager()
         
         if self._configured:
             self._initialize_handlers()
+            # Initialize schedule executor after handlers
+            self._initialize_schedule_executor()
         
         # Always initialize web server
         self._initialize_web_server()
@@ -161,11 +169,15 @@ class MyBlink:
             self.voipms_handler,
             self.health_monitor,
             self.config_manager,
+            self.history_manager,
             self.logger
         )
         
         # Initialize media manager
         self.media_manager = self._initialize_media_manager()
+        
+        # Initialize BlinkBridge manager
+        self.blinkbridge_manager = self._initialize_blinkbridge_manager()
         
         self.logger.info("Application handlers initialized")
     
@@ -187,6 +199,7 @@ class MyBlink:
             manager = MediaManager(
                 self.blink_handler,
                 media_config,
+                self.history_manager,
                 self.logger
             )
             
@@ -200,6 +213,96 @@ class MyBlink:
         except Exception as e:
             self.logger.error(f"Failed to initialize media manager: {e}", exc_info=True)
             return None
+    
+    def _initialize_blinkbridge_manager(self) -> Optional[Any]:
+        """
+        Initialize BlinkBridge RTSP stream manager.
+        
+        Returns:
+            BlinkBridgeManager instance or None if initialization fails
+        """
+        try:
+            from modules.blinkbridge_manager import BlinkBridgeManager
+            
+            # Get BlinkBridge config from app config
+            blinkbridge_config = self.config.get('blinkbridge', {})
+            
+            # Set defaults
+            if 'work_dir' not in blinkbridge_config:
+                blinkbridge_config['work_dir'] = '/tmp/blinkbridge'
+            if 'rtsp_host' not in blinkbridge_config:
+                blinkbridge_config['rtsp_host'] = 'localhost'
+            if 'rtsp_port' not in blinkbridge_config:
+                blinkbridge_config['rtsp_port'] = 8554
+            if 'poll_interval' not in blinkbridge_config:
+                blinkbridge_config['poll_interval'] = 1.0
+            if 'max_failures' not in blinkbridge_config:
+                blinkbridge_config['max_failures'] = 3
+            if 'restart_delay_seconds' not in blinkbridge_config:
+                blinkbridge_config['restart_delay_seconds'] = 60
+            
+            # Create BlinkBridge manager
+            manager = BlinkBridgeManager(self, blinkbridge_config)
+            
+            enabled = blinkbridge_config.get('enabled', False)
+            if enabled:
+                self.logger.info("BlinkBridge manager initialized and will start with enabled cameras")
+            else:
+                self.logger.info("BlinkBridge manager initialized but disabled")
+            
+            return manager
+            
+        except Exception as e:
+            self.logger.error(f"Failed to initialize BlinkBridge manager: {e}", exc_info=True)
+            return None
+    
+    def _initialize_history_manager(self) -> None:
+        """
+        Initialize history database manager.
+        
+        Creates SQLite database for storing:
+        - Scheduled rules (automated camera/sync actions)
+        - Battery history (for trend analysis)
+        - Status history (online/offline tracking)
+        - Media download history (analytics)
+        """
+        try:
+            from modules.history_manager import HistoryManager
+            
+            # Database path in data directory
+            db_path = Path("/app/data/myblink_history.db")
+            
+            self.history_manager = HistoryManager(db_path, self.logger)
+            self.logger.info("History database initialized")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to initialize history manager: {e}", exc_info=True)
+            self.history_manager = None
+    
+    def _initialize_schedule_executor(self) -> None:
+        """
+        Initialize schedule executor for automated rules.
+        
+        The executor runs in the background and executes scheduled rules
+        at the appropriate times.
+        """
+        if not self.history_manager or not self.blink_handler:
+            self.logger.warning("Cannot initialize schedule executor: missing dependencies")
+            return
+        
+        try:
+            from modules.schedule_executor import ScheduleExecutor
+            
+            self.schedule_executor = ScheduleExecutor(
+                history_manager=self.history_manager,
+                blink_handler=self.blink_handler,
+                logger=self.logger,
+            )
+            self.logger.info("Schedule executor initialized")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to initialize schedule executor: {e}", exc_info=True)
+            self.schedule_executor = None
     
     def _initialize_web_server(self) -> None:
         """
@@ -308,10 +411,10 @@ class MyBlink:
                             e
                         )
         
-        # Calculate next run time (every hour on the hour)
+        # Calculate next run time (every 5 minutes)
         now = time.time()
-        seconds_past_hour = now % 3600
-        next_run = now + (3600 - seconds_past_hour)
+        seconds_past_interval = now % 300  # 300 seconds = 5 minutes
+        next_run = now + (300 - seconds_past_interval)
         
         if self._configured:
             self.logger.info(
@@ -342,8 +445,8 @@ class MyBlink:
                 if current_time >= next_run and self.blink_handler:
                     await self.blink_handler.run_scheduled_jobs()
                     
-                    # Calculate next run time
-                    next_run += 3600
+                    # Calculate next run time (every 5 minutes)
+                    next_run += 300
                     self.logger.info(
                         f"Next scheduled run: {datetime.fromtimestamp(next_run).strftime('%Y-%m-%d %H:%M:%S')}"
                     )
@@ -400,6 +503,13 @@ class MyBlink:
         """
         self.logger.info("Initiating graceful shutdown")
         self._shutdown = True
+        
+        # Stop schedule executor
+        if hasattr(self, 'schedule_executor') and self.schedule_executor:
+            try:
+                await self.schedule_executor.stop()
+            except Exception as e:
+                self.logger.error(f"Error stopping schedule executor: {e}")
         
         # Stop media manager
         if hasattr(self, 'media_manager') and self.media_manager:
@@ -468,6 +578,13 @@ class MyBlink:
                 self.media_manager.start(loop)
             except Exception as e:
                 self.logger.error(f"Failed to start media manager: {e}")
+        
+        # Start schedule executor if available
+        if hasattr(self, 'schedule_executor') and self.schedule_executor:
+            try:
+                loop.run_until_complete(self.schedule_executor.start())
+            except Exception as e:
+                self.logger.error(f"Failed to start schedule executor: {e}")
         
         try:
             # Run main loop

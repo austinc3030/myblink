@@ -11,6 +11,7 @@ import logging
 import os
 import secrets
 import yaml
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -537,6 +538,12 @@ class WebServer:
                         self.logger.error("2FA verification timed out")
                         return jsonify({'error': '2FA verification timed out'}), 500
                     except Exception as verify_error:
+                        # Check for specific authentication errors
+                        from blinkpy.auth import LoginError, UnauthorizedError
+                        if isinstance(verify_error, (LoginError, UnauthorizedError)):
+                            self.logger.error(f"Authentication error: {verify_error}", exc_info=True)
+                            return jsonify({'error': f'Authentication failed: {str(verify_error)}. The 2FA code may be incorrect or expired. Please try again.'}), 401
+                        
                         self.logger.error(f"2FA verification failed: {verify_error}", exc_info=True)
                         return jsonify({'error': f'2FA verification failed: {str(verify_error)}'}), 500
                 else:
@@ -586,7 +593,6 @@ class WebServer:
         
         # Setup/Configuration API routes - require auth
         @self.app.route('/api/setup/status')
-        @self._require_auth
         def setup_status():
             """Check if application is configured."""
             try:
@@ -719,20 +725,292 @@ class WebServer:
                 self.logger.error(f"Error updating config: {e}")
                 return jsonify({"error": str(e)}), 500
         
+        @self.app.route('/api/system/params', methods=['POST'])
+        @self._require_auth
+        def update_system_params():
+            """Update system parameters (refresh interval, retry limit, etc)."""
+            try:
+                data = request.get_json()
+                
+                # Update config with new parameters
+                config = self.myblink_app.config
+                
+                if 'refresh_interval' in data:
+                    refresh_interval = int(data['refresh_interval'])
+                    if 60 <= refresh_interval <= 3600:  # 1-60 minutes in seconds
+                        config.refresh_interval = refresh_interval
+                
+                if 'default_duration_hours' in data:
+                    duration = float(data['default_duration_hours'])
+                    if 0.5 <= duration <= 24:
+                        config.default_duration_hours = duration
+                
+                if 'retry_limit' in data:
+                    retry_limit = int(data['retry_limit'])
+                    if 1 <= retry_limit <= 10:
+                        config.blink_retry_limit = retry_limit
+                
+                # Save updated config
+                self.myblink_app.config_manager.save_config()
+                
+                self.logger.info(f"System parameters updated: refresh_interval={config.refresh_interval}s, "
+                                f"default_duration={config.default_duration_hours}h, retry_limit={config.blink_retry_limit}")
+                
+                return jsonify({"success": True})
+                
+            except Exception as e:
+                self.logger.error(f"Error updating system params: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        # ===== BlinkBridge RTSP Streaming Endpoints =====
+        
+        @self.app.route('/api/blinkbridge/status', methods=['GET'])
+        @self._require_auth
+        def get_blinkbridge_status():
+            """Get BlinkBridge status and configuration."""
+            try:
+                if not self.myblink_app.blinkbridge_manager:
+                    return jsonify({
+                        "enabled": False,
+                        "running": False,
+                        "message": "BlinkBridge not initialized"
+                    })
+                
+                manager = self.myblink_app.blinkbridge_manager
+                config = self.myblink_app.config.get('blinkbridge', {})
+                
+                return jsonify({
+                    "enabled": config.get('enabled', False),
+                    "running": manager.running,
+                    "rtsp_host": manager.rtsp_host,
+                    "rtsp_port": manager.rtsp_port,
+                    "poll_interval": manager.poll_interval,
+                    "max_failures": manager.max_failures,
+                    "enabled_cameras": config.get('enabled_cameras', []),
+                    "active_streams": len(manager.stream_servers)
+                })
+                
+            except Exception as e:
+                self.logger.error(f"Error getting BlinkBridge status: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/blinkbridge/start', methods=['POST'])
+        @self._require_auth
+        def start_blinkbridge():
+            """Start BlinkBridge RTSP streaming."""
+            try:
+                if not self.myblink_app.blinkbridge_manager:
+                    return jsonify({"error": "BlinkBridge not initialized"}), 500
+                
+                data = request.get_json() or {}
+                enabled_cameras = data.get('enabled_cameras')
+                
+                # Start BlinkBridge
+                if self.myblink_app._event_loop:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.myblink_app.blinkbridge_manager.start(enabled_cameras),
+                        self.myblink_app._event_loop
+                    )
+                    future.result(timeout=30)
+                    
+                    # Update config
+                    config = self.myblink_app.config
+                    if 'blinkbridge' not in config:
+                        config['blinkbridge'] = {}
+                    config['blinkbridge']['enabled'] = True
+                    if enabled_cameras:
+                        config['blinkbridge']['enabled_cameras'] = enabled_cameras
+                    self.myblink_app.config_manager.save_config()
+                    
+                    return jsonify({
+                        "success": True,
+                        "message": "BlinkBridge started",
+                        "streams": self.myblink_app.blinkbridge_manager.get_stream_info()
+                    })
+                else:
+                    return jsonify({"error": "Event loop not available"}), 500
+                    
+            except Exception as e:
+                self.logger.error(f"Error starting BlinkBridge: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/blinkbridge/stop', methods=['POST'])
+        @self._require_auth
+        def stop_blinkbridge():
+            """Stop BlinkBridge RTSP streaming."""
+            try:
+                if not self.myblink_app.blinkbridge_manager:
+                    return jsonify({"error": "BlinkBridge not initialized"}), 500
+                
+                # Stop BlinkBridge
+                if self.myblink_app._event_loop:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.myblink_app.blinkbridge_manager.stop(),
+                        self.myblink_app._event_loop
+                    )
+                    future.result(timeout=30)
+                    
+                    # Update config
+                    config = self.myblink_app.config
+                    if 'blinkbridge' in config:
+                        config['blinkbridge']['enabled'] = False
+                    self.myblink_app.config_manager.save_config()
+                    
+                    return jsonify({
+                        "success": True,
+                        "message": "BlinkBridge stopped"
+                    })
+                else:
+                    return jsonify({"error": "Event loop not available"}), 500
+                    
+            except Exception as e:
+                self.logger.error(f"Error stopping BlinkBridge: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/blinkbridge/streams', methods=['GET'])
+        @self._require_auth
+        def get_blinkbridge_streams():
+            """Get list of active RTSP streams."""
+            try:
+                if not self.myblink_app.blinkbridge_manager:
+                    return jsonify({"streams": []})
+                
+                streams = self.myblink_app.blinkbridge_manager.get_stream_info()
+                return jsonify({"streams": streams})
+                
+            except Exception as e:
+                self.logger.error(f"Error getting streams: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/blinkbridge/frigate', methods=['GET'])
+        @self._require_auth
+        def get_frigate_config():
+            """Get Frigate configuration for enabled cameras."""
+            try:
+                if not self.myblink_app.blinkbridge_manager:
+                    return jsonify({"error": "BlinkBridge not initialized"}), 404
+                
+                cameras = request.args.get('cameras')
+                if cameras:
+                    cameras = cameras.split(',')
+                
+                config = self.myblink_app.blinkbridge_manager.get_frigate_config(cameras)
+                
+                return jsonify({
+                    "config": config,
+                    "cameras": cameras or list(self.myblink_app.blinkbridge_manager.stream_servers.keys())
+                })
+                
+            except Exception as e:
+                self.logger.error(f"Error generating Frigate config: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/blinkbridge/config', methods=['POST'])
+        @self._require_auth
+        def update_blinkbridge_config():
+            """Update BlinkBridge configuration."""
+            try:
+                data = request.get_json()
+                config = self.myblink_app.config
+                
+                if 'blinkbridge' not in config:
+                    config['blinkbridge'] = {}
+                
+                # Update configuration
+                bb_config = config['blinkbridge']
+                
+                if 'enabled' in data:
+                    bb_config['enabled'] = bool(data['enabled'])
+                if 'enabled_cameras' in data:
+                    bb_config['enabled_cameras'] = data['enabled_cameras']
+                if 'rtsp_port' in data:
+                    port = int(data['rtsp_port'])
+                    if 1024 <= port <= 65535:
+                        bb_config['rtsp_port'] = port
+                if 'poll_interval' in data:
+                    interval = float(data['poll_interval'])
+                    if 0.5 <= interval <= 10:
+                        bb_config['poll_interval'] = interval
+                if 'max_failures' in data:
+                    failures = int(data['max_failures'])
+                    if 1 <= failures <= 10:
+                        bb_config['max_failures'] = failures
+                if 'restart_delay_seconds' in data:
+                    delay = int(data['restart_delay_seconds'])
+                    if 10 <= delay <= 600:
+                        bb_config['restart_delay_seconds'] = delay
+                
+                # Save config
+                self.myblink_app.config_manager.save_config()
+                
+                self.logger.info(f"BlinkBridge config updated: {bb_config}")
+                
+                return jsonify({"success": True})
+                
+            except Exception as e:
+                self.logger.error(f"Error updating BlinkBridge config: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/refresh', methods=['POST'])
+        @self._require_auth
+        def manual_refresh():
+            """Trigger manual refresh of data from Blink servers."""
+            try:
+                # Check if configured
+                if not self.myblink_app.is_configured():
+                    return jsonify({"error": "Application not configured"}), 400
+                
+                # Check if blink handler is available
+                if not self.myblink_app.blink_handler:
+                    return jsonify({"error": "Blink handler not available"}), 500
+                
+                # Trigger refresh in background
+                if self.myblink_app._event_loop:
+                    self.logger.info("Manual refresh triggered from web UI")
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.myblink_app.blink_handler.run_scheduled_jobs(),
+                        self.myblink_app._event_loop
+                    )
+                    # Wait for completion (with timeout)
+                    future.result(timeout=60)
+                    return jsonify({"success": True, "message": "Refresh completed"})
+                else:
+                    return jsonify({"error": "Event loop not available"}), 500
+                    
+            except asyncio.TimeoutError:
+                self.logger.warning("Manual refresh timed out")
+                return jsonify({"error": "Refresh operation timed out"}), 504
+            except Exception as e:
+                self.logger.error(f"Error during manual refresh: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
         @self.app.route('/api/camera/<camera_name>/snooze', methods=['POST'])
         @self._require_auth
         def toggle_camera_snooze(camera_name: str):
             """Toggle snooze for a specific camera."""
             try:
+                from .modules.db_models import ScheduleAction, ScheduleTarget
+                
                 data = request.get_json()
                 enabled = data.get('enabled', False)
+                duration_hours = data.get('duration_hours')
                 
-                self.logger.info(f"Toggle camera snooze request: {camera_name}, enabled={enabled}")
+                self.logger.info(f"Toggle camera snooze request: {camera_name}, enabled={enabled}, duration={duration_hours}h")
                 
                 # Update config first
                 self._update_camera_setting(camera_name, 'snooze', enabled)
                 
                 if enabled:
+                    # Create duration timer if specified
+                    if duration_hours and self.myblink_app.history_manager:
+                        timer_id = self.myblink_app.history_manager.create_duration_timer(
+                            target_type=ScheduleTarget.CAMERA,
+                            target_name=camera_name,
+                            action=ScheduleAction.SNOOZE,
+                            duration_hours=float(duration_hours),
+                        )
+                        self.logger.info(f"Created duration timer {timer_id} for camera {camera_name} snooze ({duration_hours}h)")
+                    
                     # Apply snooze via Blink API
                     camera = self._find_camera(camera_name)
                     if not camera:
@@ -782,17 +1060,8 @@ class WebServer:
                     
                     if result:
                         self.logger.info(f"Camera {camera_name} snoozed for {snooze_time}s")
-                        # Refresh to get updated state (non-blocking, longer timeout)
-                        if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
-                            try:
-                                future = asyncio.run_coroutine_threadsafe(
-                                    self.myblink_app.blink_handler.blink.refresh(force=True),
-                                    self.myblink_app._event_loop
-                                )
-                                # Don't wait for refresh to complete - let it happen async
-                                # future.result(timeout=30)
-                            except Exception as e:
-                                self.logger.warning(f"Refresh after snooze skipped: {e}")
+                        # Don't refresh immediately - Blink API takes time to update
+                        # The state will be refreshed on next periodic update
                     else:
                         error_msg = f"Camera {camera_name} snooze returned None - product_type may not be supported"
                         self.logger.warning(error_msg)
@@ -800,6 +1069,16 @@ class WebServer:
                 else:
                     # De-snooze: disarm and re-arm the sync, then re-snooze other cameras
                     self.logger.info(f"De-snoozing camera {camera_name}")
+                    
+                    # Delete any active duration timers for this camera's snooze
+                    if self.myblink_app.history_manager:
+                        deleted = self.myblink_app.history_manager.delete_duration_timers_for_target(
+                            target_type=ScheduleTarget.CAMERA,
+                            target_name=camera_name,
+                            action=ScheduleAction.SNOOZE,
+                        )
+                        if deleted > 0:
+                            self.logger.info(f"Deleted {deleted} duration timer(s) for camera {camera_name}")
                     
                     camera = self._find_camera(camera_name)
                     sync_info = self._find_sync_for_camera(camera_name)
@@ -824,15 +1103,8 @@ class WebServer:
                     if not success:
                         return jsonify({"error": "Failed to de-snooze camera"}), 500
                     
-                    # Refresh to get updated state
-                    if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
-                        try:
-                            future = asyncio.run_coroutine_threadsafe(
-                                self.myblink_app.blink_handler.blink.refresh(force=True),
-                                self.myblink_app._event_loop
-                            )
-                        except Exception as e:
-                            self.logger.warning(f"Refresh after de-snooze skipped: {e}")
+                    # Don't refresh immediately - Blink API takes time to update
+                    # The state will be refreshed on next periodic update
                     
                     self.logger.info(f"Camera {camera_name} de-snoozed successfully")
                 
@@ -846,11 +1118,37 @@ class WebServer:
         def toggle_camera_arm(camera_name: str):
             """Toggle arm for a specific camera."""
             try:
+                from .modules.db_models import ScheduleAction, ScheduleTarget
+                
                 data = request.get_json()
                 enabled = data.get('enabled', False)
+                duration_hours = data.get('duration_hours')
+                
+                self.logger.info(f"Toggle camera arm request: {camera_name}, enabled={enabled}, duration={duration_hours}h")
                 
                 # Update config first
                 self._update_camera_setting(camera_name, 'arm', enabled)
+                
+                if enabled:
+                    # Create duration timer if specified
+                    if duration_hours and self.myblink_app.history_manager:
+                        timer_id = self.myblink_app.history_manager.create_duration_timer(
+                            target_type=ScheduleTarget.CAMERA,
+                            target_name=camera_name,
+                            action=ScheduleAction.ARM,
+                            duration_hours=float(duration_hours),
+                        )
+                        self.logger.info(f"Created duration timer {timer_id} for camera {camera_name} arm ({duration_hours}h)")
+                else:
+                    # Delete any active duration timers for this camera's arm
+                    if self.myblink_app.history_manager:
+                        deleted = self.myblink_app.history_manager.delete_duration_timers_for_target(
+                            target_type=ScheduleTarget.CAMERA,
+                            target_name=camera_name,
+                            action=ScheduleAction.ARM,
+                        )
+                        if deleted > 0:
+                            self.logger.info(f"Deleted {deleted} duration timer(s) for camera {camera_name}")
                 
                 # Apply setting immediately via Blink API
                 camera = self._find_camera(camera_name)
@@ -865,13 +1163,8 @@ class WebServer:
                     # Update local camera state immediately
                     camera.motion_enabled = enabled
                     
-                    # Refresh to get updated state from Blink
-                    if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
-                        future = asyncio.run_coroutine_threadsafe(
-                            self.myblink_app.blink_handler.blink.refresh(force=True),
-                            self.myblink_app._event_loop
-                        )
-                        future.result(timeout=10)
+                    # Don't refresh immediately - Blink API takes time to update
+                    # The state will be refreshed on next periodic update
                 
                 return jsonify({"success": True})
             except Exception as e:
@@ -885,7 +1178,15 @@ class WebServer:
             try:
                 data = request.get_json()
                 enabled = data.get('enabled', False)
+                interval_minutes = data.get('interval_minutes', 60)  # Default to 60 minutes
+                
                 self._update_camera_setting(camera_name, 'thumbnail', enabled)
+                
+                # Store the interval setting if thumbnails are enabled
+                if enabled and interval_minutes:
+                    self._update_camera_setting(camera_name, 'thumbnail_interval', interval_minutes)
+                    self.logger.info(f"Camera {camera_name} thumbnail interval set to {interval_minutes} minutes")
+                
                 return jsonify({"success": True})
             except Exception as e:
                 self.logger.error(f"Error toggling camera thumbnail: {e}")
@@ -916,6 +1217,34 @@ class WebServer:
                 return jsonify(info)
             except Exception as e:
                 self.logger.error(f"Error getting camera info: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/camera/<camera_name>/settings', methods=['GET'])
+        @self._require_auth
+        def get_camera_settings(camera_name: str):
+            """Get settings for a specific camera."""
+            try:
+                # Get settings from config
+                settings = {
+                    'thumbnail_interval': 60,  # default
+                    'snooze': False,
+                    'arm': False,
+                    'thumbnail': False
+                }
+                
+                # Try to load from config
+                if hasattr(self.myblink_app, 'config') and self.myblink_app.config:
+                    camera_settings = self.myblink_app.config.get('camera_settings', {}).get(camera_name, {})
+                    settings.update({
+                        'thumbnail_interval': camera_settings.get('thumbnail_interval', 60),
+                        'snooze': camera_settings.get('snooze', False),
+                        'arm': camera_settings.get('arm', False),
+                        'thumbnail': camera_settings.get('thumbnail', False),
+                    })
+                
+                return jsonify(settings)
+            except Exception as e:
+                self.logger.error(f"Error getting camera settings: {e}")
                 return jsonify({"error": str(e)}), 500
         
         @self.app.route('/api/camera/<camera_name>/media/thumbnail', methods=['GET'])
@@ -1132,13 +1461,28 @@ class WebServer:
         def toggle_sync_snooze(sync_name: str):
             """Toggle snooze for a sync module."""
             try:
+                from .modules.db_models import ScheduleAction, ScheduleTarget
+                
                 data = request.get_json()
                 enabled = data.get('enabled', False)
+                duration_hours = data.get('duration_hours')
+                
+                self.logger.info(f"Toggle sync snooze request: {sync_name}, enabled={enabled}, duration={duration_hours}h")
                 
                 # Update config first
                 self._update_sync_setting(sync_name, 'snooze', enabled)
                 
                 if enabled:
+                    # Create duration timer if specified
+                    if duration_hours and self.myblink_app.history_manager:
+                        timer_id = self.myblink_app.history_manager.create_duration_timer(
+                            target_type=ScheduleTarget.SYNC,
+                            target_name=sync_name,
+                            action=ScheduleAction.SNOOZE,
+                            duration_hours=float(duration_hours),
+                        )
+                        self.logger.info(f"Created duration timer {timer_id} for sync {sync_name} snooze ({duration_hours}h)")
+                    
                     # Apply snooze via Blink API
                     sync = self._find_sync(sync_name)
                     if sync and self.myblink_app._event_loop:
@@ -1150,18 +1494,23 @@ class WebServer:
                         result = future.result(timeout=30)
                         if result:
                             self.logger.info(f"Sync {sync_name} snoozed for {snooze_time}s")
-                            # Refresh to get updated state
-                            if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
-                                future = asyncio.run_coroutine_threadsafe(
-                                    self.myblink_app.blink_handler.blink.refresh(force=True),
-                                    self.myblink_app._event_loop
-                                )
-                                future.result(timeout=10)
+                            # Don't refresh immediately - Blink API takes time to update
+                            # The state will be refreshed on next periodic update
                         else:
                             self.logger.warning(f"Sync {sync_name} snooze may have failed")
                 else:
                     # De-snooze: disarm and re-arm the sync
                     self.logger.info(f"De-snoozing sync {sync_name}")
+                    
+                    # Delete any active duration timers for this sync's snooze
+                    if self.myblink_app.history_manager:
+                        deleted = self.myblink_app.history_manager.delete_duration_timers_for_target(
+                            target_type=ScheduleTarget.SYNC,
+                            target_name=sync_name,
+                            action=ScheduleAction.SNOOZE,
+                        )
+                        if deleted > 0:
+                            self.logger.info(f"Deleted {deleted} duration timer(s) for sync {sync_name}")
                     
                     sync = self._find_sync(sync_name)
                     if not sync:
@@ -1182,16 +1531,8 @@ class WebServer:
                     if not success:
                         return jsonify({"error": "Failed to de-snooze sync"}), 500
                     
-                    # Refresh to get updated state
-                    if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
-                        try:
-                            future = asyncio.run_coroutine_threadsafe(
-                                self.myblink_app.blink_handler.blink.refresh(force=True),
-                                self.myblink_app._event_loop
-                            )
-                            future.result(timeout=10)
-                        except Exception as e:
-                            self.logger.warning(f"Refresh after de-snooze skipped: {e}")
+                    # Don't refresh immediately - Blink API takes time to update
+                    # The state will be refreshed on next periodic update
                     
                     self.logger.info(f"Sync {sync_name} de-snoozed successfully")
                 
@@ -1205,11 +1546,37 @@ class WebServer:
         def toggle_sync_arm(sync_name: str):
             """Toggle arm for a sync module."""
             try:
+                from .modules.db_models import ScheduleAction, ScheduleTarget
+                
                 data = request.get_json()
                 enabled = data.get('enabled', False)
+                duration_hours = data.get('duration_hours')
+                
+                self.logger.info(f"Toggle sync arm request: {sync_name}, enabled={enabled}, duration={duration_hours}h")
                 
                 # Update config first
                 self._update_sync_setting(sync_name, 'arm', enabled)
+                
+                if enabled:
+                    # Create duration timer if specified
+                    if duration_hours and self.myblink_app.history_manager:
+                        timer_id = self.myblink_app.history_manager.create_duration_timer(
+                            target_type=ScheduleTarget.SYNC,
+                            target_name=sync_name,
+                            action=ScheduleAction.ARM,
+                            duration_hours=float(duration_hours),
+                        )
+                        self.logger.info(f"Created duration timer {timer_id} for sync {sync_name} arm ({duration_hours}h)")
+                else:
+                    # Delete any active duration timers for this sync's arm
+                    if self.myblink_app.history_manager:
+                        deleted = self.myblink_app.history_manager.delete_duration_timers_for_target(
+                            target_type=ScheduleTarget.SYNC,
+                            target_name=sync_name,
+                            action=ScheduleAction.ARM,
+                        )
+                        if deleted > 0:
+                            self.logger.info(f"Deleted {deleted} duration timer(s) for sync {sync_name}")
                 
                 # Apply setting immediately via Blink API
                 sync = self._find_sync(sync_name)
@@ -1221,13 +1588,8 @@ class WebServer:
                     result = future.result(timeout=30)
                     self.logger.info(f"Sync {sync_name} {'armed' if enabled else 'disarmed'} - result: {result}")
                     
-                    # Refresh to get updated state from Blink
-                    if self.myblink_app.blink_handler and self.myblink_app.blink_handler.blink:
-                        future = asyncio.run_coroutine_threadsafe(
-                            self.myblink_app.blink_handler.blink.refresh(force=True),
-                            self.myblink_app._event_loop
-                        )
-                        future.result(timeout=10)
+                    # Don't refresh immediately - Blink API takes time to update
+                    # The state will be refreshed on next periodic update
                 
                 return jsonify({"success": True})
             except Exception as e:
@@ -1796,6 +2158,358 @@ class WebServer:
             except Exception as e:
                 self.logger.error(f"Error updating credentials: {e}")
                 return jsonify({"error": str(e)}), 500
+        
+        # ========== Scheduled Rules API ==========
+        
+        @self.app.route('/api/schedules')
+        @self._require_auth
+        def get_scheduled_rules():
+            """Get all scheduled rules."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                # Get optional filters from query params
+                target_type = request.args.get('target_type')
+                target_name = request.args.get('target_name')
+                action = request.args.get('action')
+                enabled_only = request.args.get('enabled_only', 'false').lower() == 'true'
+                
+                from modules.db_models import ScheduleTarget, ScheduleAction
+                
+                # Convert string params to enums if provided
+                target_type_enum = ScheduleTarget(target_type) if target_type else None
+                action_enum = ScheduleAction(action) if action else None
+                
+                rules = self.myblink_app.history_manager.get_all_scheduled_rules(
+                    target_type=target_type_enum,
+                    target_name=target_name,
+                    action=action_enum,
+                    enabled_only=enabled_only,
+                )
+                
+                return jsonify({
+                    "rules": [rule.to_dict() for rule in rules],
+                    "count": len(rules)
+                })
+            except Exception as e:
+                self.logger.error(f"Error getting scheduled rules: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/schedules/<int:rule_id>')
+        @self._require_auth
+        def get_scheduled_rule(rule_id):
+            """Get a specific scheduled rule."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                rule = self.myblink_app.history_manager.get_scheduled_rule(rule_id)
+                if not rule:
+                    return jsonify({"error": "Rule not found"}), 404
+                
+                return jsonify(rule.to_dict())
+            except Exception as e:
+                self.logger.error(f"Error getting scheduled rule: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/schedules', methods=['POST'])
+        @self._require_auth
+        def create_scheduled_rule():
+            """Create a new scheduled rule."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                data = request.get_json()
+                if not data:
+                    return jsonify({"error": "No data provided"}), 400
+                
+                from modules.db_models import ScheduleTarget, ScheduleAction
+                
+                # Validate required fields
+                if 'target_type' not in data or 'target_name' not in data or 'action' not in data:
+                    return jsonify({"error": "Missing required fields: target_type, target_name, action"}), 400
+                
+                # Create rule
+                rule_id = self.myblink_app.history_manager.create_scheduled_rule(
+                    target_type=ScheduleTarget(data['target_type']),
+                    target_name=data['target_name'],
+                    action=ScheduleAction(data['action']),
+                    interval_hours=data.get('interval_hours'),
+                    interval_minutes=data.get('interval_minutes'),
+                    start_minute=data.get('start_minute'),
+                    duration_hours=data.get('duration_hours'),
+                    start_time=data.get('start_time'),
+                    end_time=data.get('end_time'),
+                    days_of_week=data.get('days_of_week'),
+                    enabled=data.get('enabled', True),
+                )
+                
+                # Get the created rule
+                rule = self.myblink_app.history_manager.get_scheduled_rule(rule_id)
+                return jsonify(rule.to_dict()), 201
+            except Exception as e:
+                self.logger.error(f"Error creating scheduled rule: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/schedules/<int:rule_id>', methods=['PUT'])
+        @self._require_auth
+        def update_scheduled_rule(rule_id):
+            """Update an existing scheduled rule."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                data = request.get_json()
+                if not data:
+                    return jsonify({"error": "No data provided"}), 400
+                
+                # Update rule
+                updated = self.myblink_app.history_manager.update_scheduled_rule(
+                    rule_id=rule_id,
+                    enabled=data.get('enabled'),
+                    interval_hours=data.get('interval_hours'),
+                    interval_minutes=data.get('interval_minutes'),
+                    start_minute=data.get('start_minute'),
+                    duration_hours=data.get('duration_hours'),
+                    start_time=data.get('start_time'),
+                    end_time=data.get('end_time'),
+                    days_of_week=data.get('days_of_week'),
+                )
+                
+                if not updated:
+                    return jsonify({"error": "Rule not found"}), 404
+                
+                # Get the updated rule
+                rule = self.myblink_app.history_manager.get_scheduled_rule(rule_id)
+                return jsonify(rule.to_dict())
+            except Exception as e:
+                self.logger.error(f"Error updating scheduled rule: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/schedules/<int:rule_id>', methods=['DELETE'])
+        @self._require_auth
+        def delete_scheduled_rule(rule_id):
+            """Delete a scheduled rule."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                deleted = self.myblink_app.history_manager.delete_scheduled_rule(rule_id)
+                if not deleted:
+                    return jsonify({"error": "Rule not found"}), 404
+                
+                return jsonify({"success": True})
+            except Exception as e:
+                self.logger.error(f"Error deleting scheduled rule: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        # ========== Schedule Execution Log API ==========
+        
+        @self.app.route('/api/schedules/execution-log')
+        @self._require_auth
+        def get_execution_log():
+            """Get schedule execution log."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                rule_id = request.args.get('rule_id', type=int)
+                since_str = request.args.get('since')
+                since = datetime.fromisoformat(since_str) if since_str else None
+                limit = int(request.args.get('limit', 100))
+                
+                logs = self.myblink_app.history_manager.get_schedule_execution_log(
+                    rule_id=rule_id,
+                    since=since,
+                    limit=limit,
+                )
+                
+                return jsonify({
+                    "logs": [log.to_dict() for log in logs],
+                    "count": len(logs)
+                })
+            except Exception as e:
+                self.logger.error(f"Error getting execution log: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/schedules/execution-stats')
+        @self._require_auth
+        def get_execution_stats():
+            """Get schedule execution statistics."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                rule_id = request.args.get('rule_id', type=int)
+                since_str = request.args.get('since')
+                since = datetime.fromisoformat(since_str) if since_str else None
+                
+                stats = self.myblink_app.history_manager.get_execution_stats(
+                    rule_id=rule_id,
+                    since=since,
+                )
+                
+                return jsonify(stats)
+            except Exception as e:
+                self.logger.error(f"Error getting execution stats: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        # ========== History API ==========
+        
+        @self.app.route('/api/history/battery/<camera_name>')
+        @self._require_auth
+        def get_battery_history(camera_name):
+            """Get battery history for a camera."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                # Get optional since parameter
+                since_str = request.args.get('since')
+                since = datetime.fromisoformat(since_str) if since_str else None
+                
+                limit = int(request.args.get('limit', 1000))
+                
+                history = self.myblink_app.history_manager.get_battery_history(
+                    camera_name=camera_name,
+                    since=since,
+                    limit=limit,
+                )
+                
+                return jsonify({
+                    "camera_name": camera_name,
+                    "history": [record.to_dict() for record in history],
+                    "count": len(history)
+                })
+            except Exception as e:
+                self.logger.error(f"Error getting battery history: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/history/battery/<camera_name>/stats')
+        @self._require_auth
+        def get_battery_stats(camera_name):
+            """Get battery statistics for a camera."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                # Get optional since parameter
+                since_str = request.args.get('since')
+                since = datetime.fromisoformat(since_str) if since_str else None
+                
+                stats = self.myblink_app.history_manager.get_battery_statistics(
+                    camera_name=camera_name,
+                    since=since,
+                )
+                
+                return jsonify(stats)
+            except Exception as e:
+                self.logger.error(f"Error getting battery stats: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/history/status/<camera_name>')
+        @self._require_auth
+        def get_status_history(camera_name):
+            """Get status history for a camera."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                # Get optional since parameter
+                since_str = request.args.get('since')
+                since = datetime.fromisoformat(since_str) if since_str else None
+                
+                limit = int(request.args.get('limit', 1000))
+                
+                history = self.myblink_app.history_manager.get_status_history(
+                    camera_name=camera_name,
+                    since=since,
+                    limit=limit,
+                )
+                
+                return jsonify({
+                    "camera_name": camera_name,
+                    "history": [record.to_dict() for record in history],
+                    "count": len(history)
+                })
+            except Exception as e:
+                self.logger.error(f"Error getting status history: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/history/status/<camera_name>/stats')
+        @self._require_auth
+        def get_uptime_stats(camera_name):
+            """Get uptime statistics for a camera."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                # Get optional since parameter
+                since_str = request.args.get('since')
+                since = datetime.fromisoformat(since_str) if since_str else None
+                
+                stats = self.myblink_app.history_manager.get_uptime_statistics(
+                    camera_name=camera_name,
+                    since=since,
+                )
+                
+                return jsonify(stats)
+            except Exception as e:
+                self.logger.error(f"Error getting uptime stats: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/history/media')
+        @self._require_auth
+        def get_media_history():
+            """Get media download history."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                camera_name = request.args.get('camera_name')
+                media_type = request.args.get('media_type')
+                since_str = request.args.get('since')
+                since = datetime.fromisoformat(since_str) if since_str else None
+                limit = int(request.args.get('limit', 1000))
+                
+                history = self.myblink_app.history_manager.get_media_download_history(
+                    camera_name=camera_name,
+                    media_type=media_type,
+                    since=since,
+                    limit=limit,
+                )
+                
+                return jsonify({
+                    "history": [record.to_dict() for record in history],
+                    "count": len(history)
+                })
+            except Exception as e:
+                self.logger.error(f"Error getting media history: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/history/media/stats')
+        @self._require_auth
+        def get_media_stats():
+            """Get media download statistics."""
+            try:
+                if not self.myblink_app.history_manager:
+                    return jsonify({"error": "History manager not available"}), 500
+                
+                camera_name = request.args.get('camera_name')
+                since_str = request.args.get('since')
+                since = datetime.fromisoformat(since_str) if since_str else None
+                
+                stats = self.myblink_app.history_manager.get_media_statistics(
+                    camera_name=camera_name,
+                    since=since,
+                )
+                
+                return jsonify(stats)
+            except Exception as e:
+                self.logger.error(f"Error getting media stats: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
     
     def _get_current_state(self) -> Dict[str, Any]:
         """Get current state of all cameras and syncs (sync version - config only)."""
@@ -1849,11 +2563,15 @@ class WebServer:
             except Exception as e:
                 self.logger.debug(f"Could not get snooze status for sync {sync_name}: {e}")
             
+            # Check if sync is online (available)
+            sync_online = getattr(sync, 'available', False)
+            
             sync_data = {
                 "name": sync_name,
                 # Use actual Blink state for display (frontend expects 'arm', 'snooze')
                 "arm": sync_armed if sync_armed is not None else False,
                 "snooze": sync_snoozed,
+                "online": sync_online,
                 "cameras": []
             }
             
@@ -1872,11 +2590,21 @@ class WebServer:
                     except Exception as e:
                         self.logger.debug(f"Could not get snooze status for {camera_name}: {e}")
                     
+                    # Camera is online if it has wifi_strength (better indicator than motion_enabled)
+                    # A camera can be disabled/disarmed but still online
+                    camera_online = False
+                    if hasattr(camera, 'wifi_strength') and camera.wifi_strength is not None:
+                        camera_online = True
+                    elif hasattr(camera, 'battery_level') and camera.battery_level is not None:
+                        # Fallback: if we have battery level, camera is probably online
+                        camera_online = True
+                    
                     camera_data = {
                         "name": camera_name,
                         # Use actual Blink state for display (frontend expects 'arm', 'snooze', 'thumbnail')
                         "arm": camera_armed,
                         "snooze": camera_snoozed,
+                        "online": camera_online,
                         # Thumbnail is config-based (not a Blink state)
                         "thumbnail": camera_name in self.myblink_app.config.thumbnail_cams if self.myblink_app.config else False
                     }

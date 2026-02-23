@@ -44,6 +44,7 @@ class BlinkHandler:
         voipms_handler: Any,  # VoipMsHandler (avoiding circular import)
         health_monitor: Any,  # HealthMonitor (avoiding circular import)
         config_manager: Any,  # ConfigManager (avoiding circular import)
+        history_manager: Any = None,  # HistoryManager (avoiding circular import)
         logger: Optional[logging.Logger] = None
     ):
         """
@@ -55,6 +56,7 @@ class BlinkHandler:
             voipms_handler: VoIP.ms handler for 2FA
             health_monitor: Health monitoring instance
             config_manager: Configuration manager for saving config
+            history_manager: History manager for recording metrics
             logger: Logger instance (creates new one if not provided)
         """
         self.credentials = credentials
@@ -62,6 +64,7 @@ class BlinkHandler:
         self.voipms_handler = voipms_handler
         self.health_monitor = health_monitor
         self.config_manager = config_manager
+        self.history_manager = history_manager
         self.logger = logger or logging.getLogger(__name__)
         
         self.blink: Optional[Blink] = None
@@ -643,7 +646,8 @@ class BlinkHandler:
         Run all scheduled maintenance jobs.
         
         Executes thumbnail updates, camera rearming, and camera snoozing
-        in sequence. Designed to be called on a schedule.
+        in sequence. Also records camera metrics (battery, status) if history manager is available.
+        Designed to be called on a schedule.
         """
         self.logger.info("Running scheduled jobs")
         
@@ -651,6 +655,7 @@ class BlinkHandler:
             ("update_thumbnails", self.update_thumbnails),
             ("rearm_cameras", self.rearm_cameras),
             ("snooze_cameras", self.snooze_cameras),
+            ("record_camera_metrics", self.record_camera_metrics),
         ]
         
         for job_name, job_func in jobs:
@@ -663,3 +668,272 @@ class BlinkHandler:
                 # Continue with next job even if one fails
         
         self.logger.info("Completed all scheduled jobs")
+    
+    async def record_camera_metrics(self) -> None:
+        """
+        Record battery and status metrics for all cameras.
+        
+        Captures current battery voltage and online/offline status for each camera
+        and stores in history database. Called as part of scheduled jobs.
+        """
+        if not self.history_manager:
+            self.logger.debug("History manager not available, skipping metrics recording")
+            return
+        
+        if not self.blink or not self.blink.sync:
+            self.logger.debug("Blink not initialized, skipping metrics recording")
+            return
+        
+        try:
+            self.logger.debug("Recording camera metrics")
+            
+            for sync_name, sync_module in self.blink.sync.items():
+                # Record sync module status
+                try:
+                    # Sync is online if it has available attribute set to True
+                    is_sync_online = getattr(sync_module, 'available', False)
+                    
+                    from .db_models import CameraStatus
+                    sync_status = CameraStatus.ONLINE if is_sync_online else CameraStatus.OFFLINE
+                    
+                    self.history_manager.record_status(
+                        camera_name=sync_name,  # Use sync name as camera_name (status_history table accepts any device name)
+                        status=sync_status
+                    )
+                    self.logger.debug(f"Recorded status for sync '{sync_name}': {sync_status.value}")
+                    
+                except Exception as e:
+                    self.logger.error(f"Failed to record metrics for sync {sync_name}: {e}")
+                
+                # Record camera metrics
+                if not hasattr(sync_module, 'cameras'):
+                    continue
+                
+                for camera_name, camera in sync_module.cameras.items():
+                    try:
+                        # Record battery level if available
+                        if hasattr(camera, 'battery_voltage') and camera.battery_voltage is not None:
+                            # Get battery level (percentage) if available
+                            battery_level = getattr(camera, 'battery_level', None) or 50  # Default to 50% if not available
+                            
+                            self.history_manager.record_battery_level(
+                                camera_name=camera_name,
+                                battery_level=battery_level,
+                                voltage=camera.battery_voltage
+                            )
+                            self.logger.debug(f"Recorded battery for {camera_name}: {battery_level}% / {camera.battery_voltage/100:.2f}V")
+                        
+                        # Record online/offline status
+                        # Camera is online if it has wifi_strength (better indicator than motion_enabled)
+                        is_online = False
+                        if hasattr(camera, 'wifi_strength') and camera.wifi_strength is not None:
+                            is_online = True
+                        elif hasattr(camera, 'battery_level') and camera.battery_level is not None:
+                            # Fallback: if we have battery level, camera is probably online
+                            is_online = True
+                        
+                        from .db_models import CameraStatus
+                        status = CameraStatus.ONLINE if is_online else CameraStatus.OFFLINE
+                        
+                        self.history_manager.record_status(
+                            camera_name=camera_name,
+                            status=status
+                        )
+                        self.logger.debug(f"Recorded status for {camera_name}: {status.value}")
+                        
+                    except Exception as e:
+                        self.logger.error(f"Failed to record metrics for camera {camera_name}: {e}")
+                        # Continue with next camera
+            
+            self.logger.debug("Completed recording camera and sync metrics")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to record camera metrics: {e}", exc_info=True)
+    
+    # ========== Helper methods for schedule executor ==========
+    
+    def _find_camera_in_blink(self, camera_name: str):
+        """Find camera object in Blink instance by name."""
+        if not self.blink or not self.blink.sync:
+            return None
+        
+        for sync_name, sync_module in self.blink.sync.items():
+            if hasattr(sync_module, 'cameras') and camera_name in sync_module.cameras:
+                return sync_module.cameras[camera_name]
+        
+        return None
+    
+    def _find_sync_in_blink(self, sync_name: str):
+        """Find sync module object in Blink instance by name."""
+        if not self.blink or not self.blink.sync:
+            return None
+        
+        return self.blink.sync.get(sync_name)
+    
+    async def set_camera_motion_detect(self, camera_name: str, enable: bool) -> bool:
+        """
+        Enable or disable motion detection for a camera.
+        
+        Args:
+            camera_name: Name of camera
+            enable: True to enable, False to disable
+            
+        Returns:
+            True if successful
+        """
+        camera = self._find_camera_in_blink(camera_name)
+        
+        if not camera:
+            self.logger.error(f"Camera '{camera_name}' not found")
+            return False
+        
+        try:
+            if enable:
+                response = await camera.async_arm(True)
+                self.logger.info(f"Enabled motion detection for '{camera_name}'")
+            else:
+                response = await camera.async_arm(False)
+                self.logger.info(f"Disabled motion detection for '{camera_name}'")
+            
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to set motion detection for '{camera_name}': {e}")
+            return False
+    
+    async def capture_thumbnail(self, camera_name: str) -> bool:
+        """
+        Capture a new thumbnail for a camera.
+        
+        Args:
+            camera_name: Name of camera
+            
+        Returns:
+            True if successful
+        """
+        camera = self._find_camera_in_blink(camera_name)
+        
+        if not camera:
+            self.logger.error(f"Camera '{camera_name}' not found")
+            return False
+        
+        try:
+            await camera.snap_picture()
+            self.logger.info(f"Captured thumbnail for '{camera_name}'")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to capture thumbnail for '{camera_name}': {e}")
+            return False
+    
+    async def set_sync_arm(self, sync_name: str, enable: bool) -> bool:
+        """
+        Enable or disable arm for entire sync module.
+        
+        Args:
+            sync_name: Name of sync module
+            enable: True to enable (arm), False to disable (snooze)
+            
+        Returns:
+            True if successful
+        """
+        sync = self._find_sync_in_blink(sync_name)
+        
+        if not sync:
+            self.logger.error(f"Sync module '{sync_name}' not found")
+            return False
+        
+        try:
+            if enable:
+                await sync.async_arm(True)
+                # Update local state
+                if sync.network_info and 'network' in sync.network_info:
+                    sync.network_info['network']['armed'] = True
+                self.logger.info(f"Armed sync module '{sync_name}'")
+            else:
+                await sync.async_arm(False)
+                # Update local state
+                if sync.network_info and 'network' in sync.network_info:
+                    sync.network_info['network']['armed'] = False
+                self.logger.info(f"Disarmed (snoozed) sync module '{sync_name}'")
+            
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to set arm for sync '{sync_name}': {e}")
+            return False    
+    async def unsnooze_camera(self, camera_name: str) -> bool:
+        """
+        Un-snooze a camera by disarming and re-arming its sync module.
+        
+        Args:
+            camera_name: Name of camera to un-snooze
+            
+        Returns:
+            True if successful
+        """
+        camera = self._find_camera_in_blink(camera_name)
+        
+        if not camera:
+            self.logger.error(f"Camera '{camera_name}' not found")
+            return False
+        
+        # Find the sync module for this camera
+        sync = None
+        for s in self.blink.sync.values():
+            if camera_name in [c.name for c in s.cameras]:
+                sync = s
+                break
+        
+        if not sync:
+            self.logger.error(f"Sync module for camera '{camera_name}' not found")
+            return False
+        
+        try:
+            # Disarm and re-arm the sync to un-snooze the camera
+            await sync.async_arm(False)
+            # Update local state
+            if sync.network_info and 'network' in sync.network_info:
+                sync.network_info['network']['armed'] = False
+            await asyncio.sleep(2)
+            await sync.async_arm(True)
+            # Update local state
+            if sync.network_info and 'network' in sync.network_info:
+                sync.network_info['network']['armed'] = True
+            
+            self.logger.info(f"Un-snoozed camera '{camera_name}' by cycling its sync module")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to un-snooze camera '{camera_name}': {e}")
+            return False
+    
+    async def unsnooze_sync(self, sync_name: str) -> bool:
+        """
+        Un-snooze a sync module by disarming and re-arming it.
+        
+        Args:
+            sync_name: Name of sync module to un-snooze
+            
+        Returns:
+            True if successful
+        """
+        sync = self._find_sync_in_blink(sync_name)
+        
+        if not sync:
+            self.logger.error(f"Sync module '{sync_name}' not found")
+            return False
+        
+        try:
+            # Disarm and re-arm to un-snooze
+            await sync.async_arm(False)
+            # Update local state
+            if sync.network_info and 'network' in sync.network_info:
+                sync.network_info['network']['armed'] = False
+            await asyncio.sleep(2)
+            await sync.async_arm(True)
+            # Update local state
+            if sync.network_info and 'network' in sync.network_info:
+                sync.network_info['network']['armed'] = True
+            
+            self.logger.info(f"Un-snoozed sync module '{sync_name}'")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to un-snooze sync '{sync_name}': {e}")
+            return False
